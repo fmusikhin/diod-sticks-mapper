@@ -6,6 +6,7 @@
 *.json text eol=lf
 *.csv  text eol=lf
 
-# Бинарники TouchDesigner — через Git LFS
-*.toe filter=lfs diff=lfs merge=lfs -text
-*.tox filter=lfs diff=lfs merge=lfs -text
+# Бинарники TouchDesigner — обычным git, без LFS (квота LFS тратится на каждое скачивание
+# публичного репо). .toe коммитим только на контрольных точках, .tox — в GitHub Releases.
+*.toe binary
+*.tox binary
