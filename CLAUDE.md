@@ -1,6 +1,6 @@
 # Diod Sticks Mapper — правила проекта
 
-Универсальный Art-Net / sACN пиксель-маппер для TouchDesigner (`.tox`). Обзор — `README.md`.
+Универсальный Art-Net / sACN пиксель-маппер для TouchDesigner (`.tox`). Обзор — `README.md`, правила разработки — `CONTRIBUTING.md` (обязательны).
 
 ## Порядок работы
 
