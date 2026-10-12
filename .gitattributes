@@ -1,0 +1,11 @@
+* text=auto
+
+*.py   text eol=lf
+*.glsl text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.csv  text eol=lf
+
+# Бинарники TouchDesigner — через Git LFS
+*.toe filter=lfs diff=lfs merge=lfs -text
+*.tox filter=lfs diff=lfs merge=lfs -text

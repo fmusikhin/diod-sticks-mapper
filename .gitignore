@@ -1,0 +1,32 @@
+# TouchDesigner: автосейвы, бэкапы, кэш
+Backup/
+*.[0-9]*.toe
+CrashAutoSave*
+TDImportCache/
+*.toe.dir/
+*.tox.dir/
+*.toc
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Контент и видео в репозиторий не кладём
+*.mov
+*.mp4
+*.avi
+*.mkv
+*.exr
+
+# Перехваты сети и временное
+*.pcap
+captures/
+tmp/
+
+# ОС и локальные настройки
+Thumbs.db
+desktop.ini
+.DS_Store
+.claude/settings.local.json
