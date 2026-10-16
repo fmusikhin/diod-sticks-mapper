@@ -21,9 +21,18 @@ def fixture(fx_id, type_id="ft1", output_id="out1", x=0.0, **kw):
     return Fixture(id=fx_id, name=fx_id, type_id=type_id, shape=line(x), address=addr, **kw)
 
 
-def output(out_id="out1", protocol=Protocol.ARTNET, start=0, ip=None, fixture_ids=(), ports=(), **kw):
+def output(out_id="out1", protocol=Protocol.ARTNET, start=0, ip=None, fixture_ids=(), ports=(),
+           target_kind=TargetKind.UNICAST, **kw):
     return Output(id=out_id, name=out_id, protocol=protocol, start_universe=start, ip=ip,
-                  target_kind=TargetKind.UNICAST, fixture_ids=tuple(fixture_ids), ports=tuple(ports), **kw)
+                  target_kind=target_kind, fixture_ids=tuple(fixture_ids), ports=tuple(ports), **kw)
+
+
+def empty_like(p):
+    """Патч с теми же профилями, выходами (пустые списки, порты без фикстур) и группами без членов."""
+    from dataclasses import replace
+    outs = tuple(replace(o, fixture_ids=(), ports=tuple(replace(pt, fixture_ids=()) for pt in o.ports)) for o in p.outputs)
+    groups = tuple(replace(g, fixture_ids=()) for g in p.groups)
+    return make_patch(p.fixture_types, (), outs, groups)
 
 
 def make_patch(fixture_types=(), fixtures=(), outputs=(), groups=()):
