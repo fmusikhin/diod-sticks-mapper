@@ -21,7 +21,7 @@ class CsvDialect:
 RU = CsvDialect(";", ",")
 
 FIXTURE_COLUMNS: tuple[str, ...] = ("id", "name", "fixture_type", "groups", "output", "port", "universe", "channel",
-                                    "address_mode", "channel_offset", "cells", "direction", "cell_offset", "shape",
+                                    "address_mode", "channel_offset", "cells", "length_mm", "direction", "cell_offset", "shape",
                                     "x1", "y1", "x2", "y2", "points", "disabled", "every_n", "status")
 REQUIRED = ("name", "fixture_type", "shape")
 
@@ -93,7 +93,8 @@ def fixtures_rows(patch: Patch, dialect: CsvDialect = CsvDialect()) -> Rows:
         kind, x1, y1, x2, y2, pts = _shape_cols(f.shape, dialect)
         rows.append([f.id, f.name, f.type_id, "|".join(f.groups), a.output_id or "", a.port_id or "",
                      "" if a.universe is None else str(a.universe), "" if a.channel is None else str(a.channel),
-                     a.mode.value, str(a.channel_offset), str(cell_count(ft, f)) if ft else "", f.direction.value,
+                     a.mode.value, str(a.channel_offset), str(cell_count(ft, f)) if ft else "",
+                     _num(f.length_mm, dialect) if f.length_mm else "", f.direction.value,
                      str(f.cell_offset), kind, x1, y1, x2, y2, pts, "|".join(str(i) for i in sorted(f.disabled)),
                      str(f.every_n), f.acceptance.value])
     return rows
@@ -183,6 +184,7 @@ def _import_row(patch: Patch, row: dict, d: CsvDialect) -> tuple[Patch, str, boo
                   direction=Direction(row.get("direction") or "forward"), cell_offset=int(row.get("cell_offset") or 0),
                   disabled=frozenset(int(i) for i in row.get("disabled", "").split("|") if i),
                   every_n=int(row.get("every_n") or 1), address=address,
+                  length_mm=_f(row["length_mm"], d) if row.get("length_mm") else None,
                   acceptance=Acceptance(row.get("status") or "none"))
     fid = row.get("id") or ""
     exists = fid and any(f.id == fid for f in patch.fixtures)

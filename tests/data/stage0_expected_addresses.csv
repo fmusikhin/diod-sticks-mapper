@@ -1,0 +1,4 @@
+fixture_id,name,type,output,protocol,universe,universe_dotted,channel,cells,channels,universes,mode,acceptance
+fx1,fx1,RGB 200,out1,artnet,20,0.1.4,1,200,600,20:1-510;21:1-90,auto,none
+fx2,fx2,RGB 60,out2,artnet,20,0.1.4,1,60,180,20:1-180,auto,none
+fx3,fx3,RGB 128,out3,artnet,20,0.1.4,1,128,384,20:1-384,auto,none

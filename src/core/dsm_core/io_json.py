@@ -36,10 +36,12 @@ def loads(text: str) -> tuple[Patch, list[str]]:
 
 
 def dumps(patch: Patch) -> str:
+    """Патч → текст JSON: отсортированные ключи, отступ 2, LF, перевод строки в конце — байт в байт стабильно."""
     return json.dumps(to_dict(patch), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
 def load(path: str | Path) -> tuple[Patch, list[str]]:
+    """Файл → (патч, заметки). BOM в начале файла допускается."""
     return loads(Path(path).read_text(encoding="utf-8-sig"))
 
 

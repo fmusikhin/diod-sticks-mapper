@@ -49,6 +49,7 @@ def _target_key(out: Output, universe: int) -> tuple:
 
 
 def validate(patch: Patch) -> list[Issue]:
+    """Все конфликты патча: ошибки раньше предупреждений, затем по выходу и юниверсу. Патч не меняется."""
     issues: list[Issue] = []
     types = {t.id: t for t in patch.fixture_types}
     outs = {o.id: o for o in patch.outputs}

@@ -1,0 +1,282 @@
+{
+  "canvas": {
+    "background": null,
+    "height": 720,
+    "px_per_m": null,
+    "units": "px",
+    "width": 1280
+  },
+  "fixture_types": [
+    {
+      "bits": 8,
+      "cell_extra": [],
+      "cells": 8,
+      "cells_per_m": null,
+      "color_order": "RGB",
+      "gamma": 1.0,
+      "head": [
+        {
+          "bits": 8,
+          "default": 255,
+          "name": "dim",
+          "role": "control"
+        },
+        {
+          "bits": 8,
+          "default": 0,
+          "name": "strobe",
+          "role": "control"
+        }
+      ],
+      "height": 1,
+      "id": "ft1",
+      "kind": "bar",
+      "layout": "tl_rows",
+      "length_mm": null,
+      "name": "Бар 8 ячеек с общими каналами",
+      "pitch_mm": null,
+      "tail": [
+        {
+          "bits": 8,
+          "default": 0,
+          "name": "mode",
+          "role": "control"
+        }
+      ],
+      "watts_per_cell": null,
+      "white_balance": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "white_mode": "none",
+      "width": 1
+    }
+  ],
+  "fixtures": [
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 1,
+        "channel_offset": 0,
+        "mode": "auto",
+        "output_id": "out1",
+        "port_id": null,
+        "universe": 0
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [
+        "grp1"
+      ],
+      "id": "fx1",
+      "length_mm": null,
+      "mute": false,
+      "name": "Бар 1",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "kind": "line",
+        "p1": [
+          200.0,
+          150.0
+        ],
+        "p2": [
+          1080.0,
+          150.0
+        ]
+      },
+      "type_id": "ft1"
+    },
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 28,
+        "channel_offset": 0,
+        "mode": "auto",
+        "output_id": "out1",
+        "port_id": null,
+        "universe": 0
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [
+        "grp1"
+      ],
+      "id": "fx2",
+      "length_mm": null,
+      "mute": false,
+      "name": "Бар 2",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "kind": "line",
+        "p1": [
+          200.0,
+          290.0
+        ],
+        "p2": [
+          1080.0,
+          290.0
+        ]
+      },
+      "type_id": "ft1"
+    },
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 55,
+        "channel_offset": 0,
+        "mode": "auto",
+        "output_id": "out1",
+        "port_id": null,
+        "universe": 0
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [
+        "grp1"
+      ],
+      "id": "fx3",
+      "length_mm": null,
+      "mute": false,
+      "name": "Бар 3",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "kind": "line",
+        "p1": [
+          200.0,
+          430.0
+        ],
+        "p2": [
+          1080.0,
+          430.0
+        ]
+      },
+      "type_id": "ft1"
+    },
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 82,
+        "channel_offset": 0,
+        "mode": "auto",
+        "output_id": "out1",
+        "port_id": null,
+        "universe": 0
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [
+        "grp1"
+      ],
+      "id": "fx4",
+      "length_mm": null,
+      "mute": false,
+      "name": "Бар 4",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "kind": "line",
+        "p1": [
+          200.0,
+          570.0
+        ],
+        "p2": [
+          1080.0,
+          570.0
+        ]
+      },
+      "type_id": "ft1"
+    }
+  ],
+  "groups": [
+    {
+      "fixture_ids": [
+        "fx1",
+        "fx2",
+        "fx3",
+        "fx4"
+      ],
+      "id": "grp1",
+      "name": "Все бары"
+    }
+  ],
+  "outputs": [
+    {
+      "art_sync": false,
+      "delay_ms": 0.0,
+      "fixture_ids": [
+        "fx1",
+        "fx2",
+        "fx3",
+        "fx4"
+      ],
+      "id": "out1",
+      "ip": null,
+      "name": "Бары",
+      "ports": [],
+      "priority": 100,
+      "protocol": "artnet",
+      "rate_hz": 60.0,
+      "rules": {
+        "auto_span": true,
+        "skip_511_512": false,
+        "whole_pixel": true
+      },
+      "start_universe": 0,
+      "target_kind": "unicast",
+      "universe_count": null
+    }
+  ],
+  "schema_version": 1
+}

@@ -1,0 +1,109 @@
+{
+  "canvas": {
+    "background": null,
+    "height": 720,
+    "px_per_m": null,
+    "units": "px",
+    "width": 1280
+  },
+  "fixture_types": [
+    {
+      "bits": 8,
+      "cell_extra": [],
+      "cells": 256,
+      "cells_per_m": null,
+      "color_order": "GRB",
+      "gamma": 1.0,
+      "head": [],
+      "height": 16,
+      "id": "ft1",
+      "kind": "matrix",
+      "layout": "tl_rows_snake",
+      "length_mm": null,
+      "name": "Матрица 16×16",
+      "pitch_mm": null,
+      "tail": [],
+      "watts_per_cell": null,
+      "white_balance": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "white_mode": "none",
+      "width": 16
+    }
+  ],
+  "fixtures": [
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 1,
+        "channel_offset": 0,
+        "mode": "auto",
+        "output_id": "out1",
+        "port_id": null,
+        "universe": 1
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [],
+      "id": "fx1",
+      "length_mm": null,
+      "mute": false,
+      "name": "Матрица 16×16",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "center": [
+          640.0,
+          360.0
+        ],
+        "kind": "rect",
+        "rotation_deg": 0.0,
+        "size": [
+          320.0,
+          320.0
+        ]
+      },
+      "type_id": "ft1"
+    }
+  ],
+  "groups": [],
+  "outputs": [
+    {
+      "art_sync": false,
+      "delay_ms": 0.0,
+      "fixture_ids": [
+        "fx1"
+      ],
+      "id": "out1",
+      "ip": null,
+      "name": "Матрица",
+      "ports": [],
+      "priority": 100,
+      "protocol": "sacn",
+      "rate_hz": 60.0,
+      "rules": {
+        "auto_span": true,
+        "skip_511_512": false,
+        "whole_pixel": true
+      },
+      "start_universe": 1,
+      "target_kind": "multicast",
+      "universe_count": null
+    }
+  ],
+  "schema_version": 1
+}
