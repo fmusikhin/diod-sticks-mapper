@@ -11,7 +11,8 @@
 | № | Спека | Что внутри | Этап |
 |---|---|---|---|
 | — | этап 0 (без спеки) | репозиторий, cc-sdd, steering, проверки движка в TD | 0 |
-| 1 | `patch-core` | модель патча, JSON-схема, адресация, проверки, импорт/экспорт CSV/JSON, импорт пресетов Resolume (Advanced Output и Fixture Library), pytest — без TD | 1 |
+| 1 | `patch-core` | модель патча, JSON-схема, адресация, проверки, импорт/экспорт CSV/JSON, pytest — без TD. **Реализовано** (ветка `spec/patch-core`): `docs/patch-format.md`, `docs/core-api.md` | 1 |
+| 1а | `resolume-import` | импорт пресетов Resolume Arena 7 (Advanced Output и Fixture Library) — отложено заказчиком | 1–2 |
 | 2 | `pixel-engine` | каркас tox, POP-геометрия из патча, выборка цвета, DMX-вывод, синхронизация с видео | 1 |
 | 3 | `patch-view` | карта DMX по юниверсам, выходы и правила портов, переадресация перетаскиванием, конфликты | 1 |
 | 4 | `mapping-editor` | холст INPUT / OUTPUT, инструменты, выделение, привязки, массивы, undo | 1–2 |
@@ -283,7 +284,8 @@ patch.json
 ## Структура
 
 ```
-src/core    ядро на чистом Python: модель патча, адресация, проверки, импорт/экспорт (pytest)
+src/core    ядро на чистом Python: пакет dsm_core — модель патча, адресация, проверки, CSV/JSON
+            (`python -m pytest tests`; формат — docs/patch-format.md, API — docs/core-api.md)
 src/td      расширения и обработчики интерфейса для TouchDesigner
 src/glsl    шейдеры
 tests       тесты ядра

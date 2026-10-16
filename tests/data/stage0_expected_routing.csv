@@ -1,0 +1,5 @@
+output_id,name,protocol,universe,universe_dotted,target_kind,ip,priority,delay_ms,rate_hz,art_sync
+out1,out1,artnet,20,0.1.4,unicast,127.0.0.1,100,0,60,0
+out1,out1,artnet,21,0.1.5,unicast,127.0.0.1,100,0,60,0
+out2,out2,artnet,20,0.1.4,unicast,127.0.0.2,100,0,60,0
+out3,out3,artnet,20,0.1.4,unicast,127.0.0.3,100,0,60,0
