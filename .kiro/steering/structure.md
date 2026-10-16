@@ -10,7 +10,8 @@
 ### Ядро
 **Где**: `src/core/`
 **Что**: модель патча, схема, адресация, проверки, импорт/экспорт — чистый Python, только stdlib
-**Пример**: `src/core/addressing.py`, `src/core/importers/resolume.py`
+**Пример**: `src/core/dsm_core/addressing.py`, `src/core/dsm_core/csv_io.py`; публичный вход — `dsm_core.api`;
+в `sys.path` добавляется `src/core` (pytest — через `pyproject.toml`)
 
 ### Слой TouchDesigner
 **Где**: `src/td/`
