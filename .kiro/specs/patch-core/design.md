@@ -205,7 +205,9 @@ flowchart TD
 ```
 
 Решения потока:
-- Курсор (юниверс, канал) идёт только вперёд; занятые ручными адресами интервалы перепрыгиваются целиком.
+- Курсор (юниверс, канал) идёт только вперёд; занятый ручным адресом интервал не делит фикстуру —
+  её начало сдвигается за препятствие (реализация уточнила design: иначе движок, зная лишь стартовый
+  адрес, разложил бы фикстуру поверх ручной).
 - `layout_fixture` — одна функция и для авто, и для ручного адреса (таблицы и проверки считают сегменты ею же),
   поэтому таблица 8.1 всегда согласована с правилами.
 - Лимиты порта не влияют на раскладку — только на проверку (`validate`).
@@ -217,8 +219,8 @@ flowchart TD
 Правила:
 1. Верхняя граница юниверса `limit = 510`, если `skip_511_512`, иначе `512`.
 2. `head` и `tail` — неделимые блоки; ячейка — неделимый блок `channels_per_cell` при `whole_pixel`.
-3. Блок, не влезающий до `limit` или упирающийся в занятый интервал, переносится на первый свободный
-   канал после препятствия; при переходе юниверса — канал 1 следующего (`auto_span`), иначе — ошибка.
+3. Блок, не влезающий до `limit`, переносится на канал 1 следующего юниверса (`auto_span`), иначе — ошибка;
+   занятые интервалы учитываются только при выборе стартового адреса (`layout_avoiding`).
 4. При `whole_pixel = false` ячейка режется по границе юниверса (сегменты по каналам, `n_cells` дробится
    в `first_cell`/`n_cells` соседних сегментов как частичные — помечается `partial = true`).
 5. `channel_offset` применяется до `head` только при автоадресации; у ручного адреса стартовый канал уже задан.
@@ -533,8 +535,11 @@ class Segment:
     first_cell: int; n_cells: int            # для head/tail = (0, 0)
     partial: bool = False                    # ячейка разрезана (whole_pixel = false)
 
-def layout_fixture(ft: FixtureType, fx: Fixture, output: Output, universe: int, channel: int,
-                   occ: Occupancy | None = None) -> list[Segment]        # raise LayoutError если не помещается
+def layout_fixture(ft: FixtureType, fx: Fixture, output: Output, universe: int, channel: int) -> list[Segment]
+    # raise LayoutError если не помещается; зависит только от стартового адреса и правил —
+    # фикстуру делит лишь граница юниверса, чтобы движок по (юниверс, канал) получил те же сегменты
+def layout_avoiding(ft, fx, output, universe, channel, occ: Occupancy) -> list[Segment]
+    # для авто: препятствие (ручной интервал) сдвигает НАЧАЛО фикстуры за себя, а не делит её
 def auto_assign(patch: Patch, output_id: str) -> tuple[Patch, list[Issue]]
 def auto_assign_all(patch: Patch) -> tuple[Patch, list[Issue]]
 def assign_sequential(patch: Patch, fixture_ids: Sequence[str], universe: int, channel: int) -> tuple[Patch, list[Issue]]

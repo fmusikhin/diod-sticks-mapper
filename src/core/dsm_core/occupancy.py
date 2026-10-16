@@ -31,6 +31,18 @@ class Occupancy:
             pos = last + 1
         return pos if pos + width - 1 <= limit else None
 
+    def free_run(self, output_id: str, universe: int, start: int, limit: int) -> tuple[int, int] | None:
+        """Первый свободный канал ≥ start и длина свободного участка от него до занятого или до limit."""
+        pos = start
+        lst = self.intervals(output_id, universe)
+        for first, last, _ in lst:
+            if last < pos:
+                continue
+            if first > pos:
+                return (pos, min(first - 1, limit) - pos + 1) if pos <= limit else None
+            pos = last + 1
+        return (pos, limit - pos + 1) if pos <= limit else None
+
     def overlaps(self) -> list[tuple[str, int, Interval, Interval]]:
         out = []
         for (o, u), lst in sorted(self._map.items()):
