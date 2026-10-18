@@ -2,7 +2,8 @@
 //
 // Вход 0 — точки geo_cells: Tex (UV на холсте, 0–1), bright, col (float3), mute (uint), active (uint).
 // Сэмплер sIn — подготовленный вход (filter linear → билинейная выборка; extend zero → UV за холстом даёт чёрный).
-// Униформ uMaster — пара Master компонента. Выход — Color (float4, альфа 1).
+// Униформ uMaster — пара Master компонента. Выход — Color (float4; альфа = 0 — это «пустой» компонент для W/A
+// в профилях без значения белого: блок dmxfixturePOP берёт его свизлом Color(...,3)).
 // API glslPOP: чтение TDIn_<Attr>(вход, индекс), запись <Attr>[индекс] (не glsladvancedPOP).
 //
 // Гамма, баланс белого, RGB→RGBW, лимит мощности — спека color-power (здесь не считаются).
@@ -18,5 +19,5 @@ void main()
 	        * (1.0 - float(TDIn_mute(0, id)))
 	        * float(TDIn_active(0, id));
 	vec3 tint = TDIn_col(0, id);
-	Color[id] = vec4(s.rgb * tint * k, 1.0);
+	Color[id] = vec4(s.rgb * tint * k, 0.0);
 }

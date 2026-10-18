@@ -161,6 +161,43 @@ class DsmEngineExt:
             if o is not None and o.OPType == "dmxoutPOP":
                 o.par.active = on
 
+    def TuneBypass(self) -> None:
+        """Обход лишних узлов при простом патче (флаги bypass — константы, ставятся при загрузке):
+        одна группа задержки → keep_c/keep_r и cache (0 кадров) не нужны; один набор фикстур → keep не нужен."""
+        dl, fx = self.ownerComp.op("delay"), self.ownerComp.op("fixtures")
+        groups = [c for c in dl.children if c.isCOMP and c.name.startswith("grp")] if dl else []
+        for g in groups:
+            frames = int(g.op("cache_c").par.outputindex.eval() != 0)
+            for n in ("cache_c", "cache_r"):
+                g.op(n).bypass = not frames
+            for n in ("keep_c", "keep_r"):
+                g.op(n).bypass = len(groups) == 1
+        if dl is not None:
+            for n in ("merge_c", "merge_r"):          # одна реплика → слияние лишнее
+                dl.op(n).bypass = len(groups) == 1
+        sets = [c for c in fx.children if c.isCOMP and c.op("keep")] if fx else []
+        cell_sets = [c for c in sets if c.name.startswith("p")]
+        raw_sets = [c for c in sets if c.name.startswith("raw_")]
+        for c in cell_sets:
+            c.op("keep").bypass = len(cell_sets) == 1
+        for c in raw_sets:
+            c.op("keep").bypass = len(raw_sets) == 1
+
+    def RefreshMaps(self, on: bool = True, frames: int = 40) -> None:
+        """Карты DMX (dmxmapDAT реплик) пересчитываются только по запросу: при on=True включаем их и через ``frames``
+        кадров выключаем — постоянно активная карта на 50 000 ячеек стоит ~170 мс CPU на кук."""
+        fx = self.ownerComp.op("fixtures")
+        if fx is None:
+            return
+        for comp in fx.children:
+            m = comp.op("map") if comp.isCOMP else None
+            if m is not None:
+                m.par.active = on
+                if on:
+                    m.par.updatevalpulse.pulse()
+        if on:
+            run(f"op('{self.ownerComp.path}').RefreshMaps(False)", delayFrames=frames)  # noqa: F821 — отложенное выключение
+
     def ReportError(self, message: str) -> None:
         """Статус error, текст в info, колбэк onOutputError. Геометрия и вывод не меняются."""
         full = self.ResolvePath(self.ownerComp.par.Patchfile.eval())
@@ -272,6 +309,7 @@ class DsmEngineExt:
             rep = self.ownerComp.op(path)
             if rep is not None:
                 rep.par.recreateall.pulse()
+        run(f"op('{self.ownerComp.path}').TuneBypass(); op('{self.ownerComp.path}').RefreshMaps(True)", delayFrames=12)  # noqa: F821
 
     def _write_info(self) -> None:
         p, t = self.patch, self.tables

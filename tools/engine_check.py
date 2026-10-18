@@ -162,9 +162,7 @@ def start(mode: str = "examples") -> None:
         _log(f"examples: {_s['queue']}")
         _next_example()
     elif mode == "perf":
-        from_perf = globals().get("run_perf")
-        if from_perf:
-            from_perf()
+        run_perf()
     elif mode == "smoke":
         from_smoke = globals().get("run_smoke")
         if from_smoke:
@@ -183,7 +181,8 @@ def _next_example() -> None:
     ok = dsm.ext.DsmEngineExt.LoadPatch(name)
     _s["results"][name] = {"loaded": ok, "status": dsm.par.Status.eval()}
     _log(f"{name}: загрузка {'ok' if ok else 'ОШИБКА: ' + dsm.ext.DsmEngineExt.message}")
-    _later("_check_map", SETTLE_FRAMES)
+    td.run(f"op('{DSM}').RefreshMaps(True, 90)", delayFrames=20)   # карты активны только по запросу
+    _later("_check_map", SETTLE_FRAMES + 30)
 
 
 def _check_map() -> None:
@@ -191,9 +190,6 @@ def _check_map() -> None:
     ext = dsm.ext.DsmEngineExt
     api, patch = ext.api, ext.patch
     name = _s["current"]
-    for o in dsm.op("fixtures").findChildren():
-        if o.OPType == "dmxmapDAT" and o.allowCooking:
-            o.par.updatevalpulse.pulse()
     m = dsm.op("diag/dmxmap_all")
     m.cook(force=True)
     exp = expected_bytes(api, patch, GREY)
@@ -225,6 +221,12 @@ def _check_map() -> None:
     res["map"] = dict(expected_channels=len(occupied), map_channels=len(got), missing=missing[:10], extra=extra[:10],
                       value_mismatch=value_mismatch[:10], value_mismatch_count=len(value_mismatch),
                       ok=(not missing and not extra and not value_mismatch))
+    if missing and _s.get("map_tries", 0) < 3:          # карта реплик заполняется не за один кук — подождать ещё
+        _s["map_tries"] = _s.get("map_tries", 0) + 1
+        td.run(f"op('{DSM}').RefreshMaps(True, 60)", delayFrames=1)
+        _later("_check_map", 40)
+        return
+    _s["map_tries"] = 0
     _log(f"{name}: карта DMX — {'совпало' if res['map']['ok'] else 'РАСХОЖДЕНИЯ'} "
          f"({len(got)}/{len(occupied)} каналов, значений не совпало {len(value_mismatch)})")
     _s["expected"] = {f"{ip}|{uni}": data for (ip, uni), data in exp.items()}
@@ -336,3 +338,140 @@ def _finish_examples() -> None:
     _log(f"ИТОГ: {'совпало' if allok else 'есть расхождения'}; отчёт {path}")
     _s["done"] = True
     _s["report"] = path
+
+
+# ---------------------------------------------------------------- режим perf (6.2)
+
+PERF_SIZES = (14400, 20000, 50000)
+PERF_FRAMES = 120
+STICK_CELLS = 144
+
+
+def synthetic_patch(api, n_cells: int):
+    """Стики по 144 px GRB на 8 выходах Art-Net 127.0.0.1–8, линии на холсте 1280×720."""
+    from dsm_core.model import Address, AddressMode, Fixture, FixtureKind, FixtureType, LineShape, Output, TargetKind
+    from dsm_core.protocol import Protocol
+    n = max(1, round(n_cells / STICK_CELLS))
+    p = api.new_patch()
+    p = api.add_fixture_type(p, FixtureType(id="ft1", name="Стик 144", kind=FixtureKind.STICK, cells=STICK_CELLS, color_order="GRB"))
+    for k in range(8):
+        p = api.add_output(p, Output(id=f"out{k + 1}", name=f"Контроллер {k + 1}", protocol=Protocol.ARTNET, start_universe=k * 64,
+                                     ip=f"127.0.0.{k + 1}", target_kind=TargetKind.UNICAST))
+    cols = 40
+    for i in range(n):
+        x = 20.0 + (i % cols) * 31.0
+        y = 20.0 + (i // cols) * 70.0
+        p = api.add_fixture(p, Fixture(id=f"fx{i + 1}", name=f"Стик {i + 1}", type_id="ft1", shape=LineShape(p1=(x, y), p2=(x, y + 60.0)),
+                                       address=Address(mode=AddressMode.AUTO, output_id=f"out{i % 8 + 1}")))
+    p, _ = api.auto_assign_all(p)
+    return p, n
+
+
+def run_perf() -> None:
+    dsm = op(DSM)  # noqa: F821
+    _s.clear()
+    _s.update(mode="perf", t0=time.time(), results={}, log=[], sizes=list(PERF_SIZES), phase=None)
+    _s["saved"] = dict(patch=dsm.par.Patchfile.eval(), active=dsm.par.Active.eval(), pixelschop=dsm.par.Pixelschop.eval(),
+                       src=op("/project1/dsm_test_in").par.top.val, realtime=project.realTime)  # noqa: F821
+    st = op(STAND)  # noqa: F821
+    ramp = st.op("test_ramp")
+    if ramp is None:
+        ramp = st.create(constantTOP, "test_ramp")  # noqa: F821
+        for c in ("colorr", "colorg", "colorb"):
+            ramp.par[c].expr = "(absTime.frame % 100) / 100.0"
+    op("/project1/dsm_test_in").par.top = "stand/test_ramp"       # вход меняется каждый кадр → цепочка кукается каждый кадр  # noqa: F821
+    dsm.par.Active = True
+    _perf_next_size()
+
+
+def _perf_next_size() -> None:
+    dsm = op(DSM)  # noqa: F821
+    if not _s["sizes"]:
+        _perf_finish()
+        return
+    n = _s["sizes"].pop(0)
+    api = dsm.ext.DsmEngineExt.api
+    p, sticks = synthetic_patch(api, n)
+    path = os.path.join(_reports_dir(), f"perf_{n}.json")
+    api.save(p, path)
+    t0 = time.perf_counter()
+    ok = dsm.ext.DsmEngineExt.LoadPatch("stand/reports/" + os.path.basename(path))
+    reload_s = time.perf_counter() - t0
+    cells = len(dsm.op("tables/geo_cells").rows()) - 1
+    _s["current"] = dict(n=n, sticks=sticks, cells=cells, reload_s=round(reload_s, 3), loaded=ok, passes=[])
+    _s["results"][str(n)] = _s["current"]
+    _log(f"perf {n}: {sticks} стиков, {cells} ячеек, Reload {reload_s:.2f} с")
+    dsm.par.Pixelschop = False
+    _s["pass"] = "chop_off"
+    _later("_perf_begin_pass", SETTLE_FRAMES + 60)      # карты активны ~40 кадров после загрузки — замер после
+
+
+def _perf_begin_pass() -> None:
+    dsm = op(DSM)  # noqa: F821
+    dsm.ext.DsmEngineExt.RefreshMaps(False)       # карты не участвуют в замере
+    dsm.ext.DsmEngineExt.TuneBypass()             # реплики уже есть — флаги обхода точно применены
+    ops = [o for o in dsm.findChildren() if o.allowCooking and not o.isCOMP]
+    _s["ops"] = ops
+    project.realTime = False  # noqa: F821
+    _s["m"] = dict(t0=time.perf_counter(), f0=int(absTime.frame), frames=0, cpu=0.0, gpu=0.0, diag_cpu=0.0, diag_gpu=0.0,  # noqa: F821
+                   per_op={}, py_cooks0=_python_cooks(), out_cooks0=sum(o.totalCooks for o in dsm.findChildren() if o.OPType == "dmxoutPOP"))
+    _later("_perf_tick", 1)
+
+
+def _python_cooks() -> int:
+    dsm = op(DSM)  # noqa: F821
+    return sum(o.totalCooks for o in dsm.findChildren() if o.isDAT and o.OPType in ("executeDAT", "parameterexecuteDAT", "datexecuteDAT", "chopexecuteDAT"))
+
+
+def _perf_tick() -> None:
+    m = _s["m"]
+    frame = int(absTime.frame)  # noqa: F821
+    cpu = gpu = dcpu = dgpu = 0.0
+    for o in _s["ops"]:
+        if o.cookAbsFrame == frame:
+            c, g = o.cpuCookTime, o.gpuCookTime
+            diag = "/dsm/diag/" in o.path or "/dsm/sel_" in o.path or o.name in ("out1", "out2", "out3", "out4", "out5")
+            if diag:
+                dcpu += c; dgpu += g
+            else:
+                cpu += c; gpu += g
+            acc = m["per_op"].setdefault(o.path, [0.0, 0.0, 0])
+            acc[0] += c; acc[1] += g; acc[2] += 1
+    m["cpu"] += cpu; m["gpu"] += gpu; m["diag_cpu"] += dcpu; m["diag_gpu"] += dgpu; m["frames"] += 1
+    if m["frames"] < PERF_FRAMES:
+        _later("_perf_tick", 1)
+        return
+    project.realTime = _s["saved"]["realtime"]  # noqa: F821
+    dsm = op(DSM)  # noqa: F821
+    dt = time.perf_counter() - m["t0"]
+    fr = m["frames"]
+    top = sorted(((k, v[0] / fr, v[1] / fr, v[2]) for k, v in m["per_op"].items()), key=lambda x: -(x[1] + x[2]))[:8]
+    res = dict(pass_=_s["pass"], frames=fr, seconds=round(dt, 2), fps=round(fr / dt, 1), cpu_ms=round(m["cpu"] / fr, 3), gpu_ms=round(m["gpu"] / fr, 3),
+               total_ms=round((m["cpu"] + m["gpu"]) / fr, 3), diag_ms=round((m["diag_cpu"] + m["diag_gpu"]) / fr, 3),
+               python_cooks=_python_cooks() - m["py_cooks0"],
+               out_cooks=sum(o.totalCooks for o in dsm.findChildren() if o.OPType == "dmxoutPOP") - m["out_cooks0"],
+               top=[(k.split("/dsm/")[-1], round(c, 3), round(g, 3), n) for k, c, g, n in top])
+    _s["current"]["passes"].append(res)
+    _log(f"perf {_s['current']['n']} [{res['pass_']}]: движок {res['total_ms']} мс/кадр (cpu {res['cpu_ms']} + gpu {res['gpu_ms']}), "
+         f"диагностика {res['diag_ms']} мс, {res['fps']} fps, Python-куков {res['python_cooks']}, куков вывода {res['out_cooks']}")
+    if _s["pass"] == "chop_off":
+        _s["pass"] = "chop_on"
+        dsm.par.Pixelschop = True
+        _later("_perf_begin_pass", 10)
+    else:
+        dsm.par.Pixelschop = False
+        _later("_perf_next_size", 10)
+
+
+def _perf_finish() -> None:
+    dsm = op(DSM)  # noqa: F821
+    sv = _s["saved"]
+    project.realTime = sv["realtime"]  # noqa: F821
+    dsm.par.Active = sv["active"]; dsm.par.Pixelschop = sv["pixelschop"]
+    op("/project1/dsm_test_in").par.top = sv["src"] or "stand/test_src"  # noqa: F821
+    dsm.par.Patchfile = sv["patch"]; dsm.ext.DsmEngineExt.Reload()
+    report = dict(mode="perf", frames=PERF_FRAMES, seconds=round(time.time() - _s["t0"], 1), results=_s["results"], log=_s["log"])
+    path = os.path.join(_reports_dir(), f"perf_{time.strftime('%Y%m%d_%H%M%S')}.json")
+    json.dump(report, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    _log(f"perf ИТОГ: отчёт {path}")
+    _s["done"] = True
