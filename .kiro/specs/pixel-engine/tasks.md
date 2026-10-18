@@ -108,7 +108,7 @@
   - _Requirements: 2.7_
 
 - [ ] 4. POP-конвейер
-- [ ] 4.1 Предподготовка входа
+- [x] 4.1 Предподготовка входа
   - `in1` → `cropTOP` (пары `Crop*`) → `resolutionTOP` (`Maxres`, 0 — обход) → `levelTOP` (`Black`, `White`,
     `Ingamma`) → `in_prepared`; все пары — через `parent.dsm.par.*`
   - Готово: при умолчаниях `in_prepared` байт в байт равен входу (проверка `compareTOP`/`analyzeTOP`);
