@@ -205,8 +205,9 @@ dsm (baseCOMP, parentshortcut='dsm', ext0object=op('./engine_ext').module.DsmEng
 │                 rep_raw (по raw_sets — группы с head/tail, master ../templates/raw_tpl) → raw_g<j>/{sel, keep ogrp==j, fixture, map}
 ├── output/       rep (replicatorCOMP по out_groups, master ../templates/out_tpl) → out_g<j>/out (dmxoutPOP: interface, multicast,
 │                 rate, sendartsync, routingtable=../../tables/routing_g<j>, fixture<i>pop → ../fixtures/p<k>g<j> и raw_g<j>; active — константа от ApplyActive)
-├── diag/         preview (renderTOP над in_prepared + точки), pixels_top (poptoTOP), pixels_chop (poptoCHOP),
-│                 dmxmap_all (mergeDAT), counters (timerCHOP 1 Гц → расширение)
+├── diag/         preview (renderTOP: geo_pts + geo_arrows, ортокамера по canvas из info; overTOP над in_prepared), pixels_top (poptoTOP),
+│                 pixels_chop (poptoCHOP, active ← Pixelschop) → pixels_named (renameCHOP r g b a), rep_maps (replicatorCOMP по map_sets:
+│                 selectDAT map_<set> → ../fixtures/<set>/map) → dmxmap_all (mergeDAT), counters (timerCHOP 1 Гц → UpdateCounters)
 ├── watch/        watch_folder (folderDAT), watch_exec (datexecuteDAT → Reload)
 ├── templates/    fx_tpl, delay_tpl — мастера репликаторов; allowCooking=False на COMP (шаблон не кукает и не дублирует каналы)
 └── out1 (outTOP превью), out2 (outTOP пиксели), out3 (outCHOP пиксели), out4 (outDAT info), out5 (outDAT карта DMX)
@@ -546,8 +547,9 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
 - `diag/preview`: `renderTOP` ортографической камеры над холстом: фон `in_prepared`, точки `px_final` цветом вывода,
   стрелка направления — отрезок от первой к последней ячейке фикстуры (линия POP из таблицы `fx_arrows`,
   пишется расширением). Бюджет 0,5 мс проверяется замером; при превышении превью упрощается до точек.
-- `diag/pixels_top` (`poptoTOP`, `layout=onerow` при ≤ 16 384 ячеек, иначе `square`), `pixels_chop` (`poptoCHOP`,
-  `active` ← `Pixelschop`), `dmxmap_all` (`mergeDAT` всех `map`), `counters` (`timerCHOP` 1 Гц → `UpdateCounters`).
+- `diag/pixels_top` (`poptoTOP`, `layout` ставит расширение: `onerow` при ≤ 16 384 ячеек, иначе `square`), `pixels_chop` (`poptoCHOP`,
+  `active` ← `Pixelschop`) → `pixels_named` (`renameCHOP`: `r g b a`), `dmxmap_all` (`mergeDAT` карт реплик фикстур через `selectDAT`
+  `map_<set>` по таблице `map_sets`; карта на `dmxoutPOP` пуста при выключенном `active`), `counters` (`timerCHOP` 1 Гц → `UpdateCounters`).
 - `watch/`: `folderDAT` на папку патча (фильтр имени файла, обновление по времени), `datexecuteDAT onTableChange`
   → `Reload`; `active` ← `Autoreload`.
 

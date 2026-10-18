@@ -9,13 +9,14 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import traceback
 from typing import Literal
 
 Status = Literal["no patch", "ok", "error"]
 
 TABLE_NAMES = ("geo_cells", "geo_prims", "geo_raw", "raw_prims", "fx_arrows", "profiles", "delay_groups", "out_groups",
-               "fixture_sets", "raw_sets", "info")
+               "arrow_pts", "arrow_prims", "fixture_sets", "raw_sets", "map_sets", "info")
 INFO_KEYS = ("status", "patch_path", "fixtures", "cells", "universes", "outputs", "errors", "warnings", "skipped",
              "pixels_layout", "message", "fps", "input")
 
@@ -63,6 +64,9 @@ class DsmEngineExt:
         self.tables = None
         self.pixels_layout: str = "onerow"
         self.loaded_mtime: float | None = None
+        self.counters: dict = {}            # fps, пакеты, куки — обновляет UpdateCounters раз в секунду
+        self._last_tick: tuple[float, int, dict] | None = None   # (время, кадр, totalCooks узлов)
+        self._last_node_message: str = ""
         ensure_core_on_path()
         from dsm_core import api  # после ensure_core_on_path
         self.api = api
@@ -166,9 +170,43 @@ class DsmEngineExt:
         self.ApplyActive()
         self._call("onOutputError", message)
 
-    # ------------------------------------------------------------------ задача 5.1
+    # ------------------------------------------------------------------ счётчики (5.1)
+    def _output_nodes(self) -> list:
+        out = self.ownerComp.op("output")
+        if out is None:
+            return []
+        return [c.op("out") for c in out.children if c.isCOMP and c.op("out") is not None]
+
     def UpdateCounters(self) -> None:
-        raise NotImplementedError("задача 5.1")
+        """Раз в секунду (timerCHOP → колбэк): fps проекта, частота кук узлов вывода, предупреждения и ошибки
+        операторов, состояние входа. Новое сообщение узла → onOutputError один раз. Пишет только таблицу info."""
+        now, frame = time.perf_counter(), int(absTime.frame)  # noqa: F821 — глобал TD
+        nodes = self._output_nodes()
+        cooks = {n.parent().name: n.totalCooks for n in nodes}
+        c: dict = {"fps": "", "rate": {}, "cooks": {}}
+        if self._last_tick is not None:
+            t0, f0, cooks0 = self._last_tick
+            dt = max(now - t0, 1e-6)
+            c["fps"] = f"{(frame - f0) / dt:.1f}"
+            c["cooks"] = {k: f"{(cooks.get(k, 0) - cooks0.get(k, 0)) / dt:.1f}" for k in cooks}
+        c["rate"] = {n.parent().name: str(n.par.rate.eval()) for n in nodes}
+        self._last_tick = (now, frame, cooks)
+        c["input"] = "connected" if self.ownerComp.inputs else "none"
+        msgs = []
+        for n in nodes + [self.ownerComp.op("engine/px_process")]:
+            if n is None:
+                continue
+            for text in (n.errors(), n.warnings()):
+                text = (text or "").strip()
+                if text:
+                    msgs.append(f"{n.path.split('/dsm/')[-1]}: {text.splitlines()[0]}")
+        c["node_messages"] = msgs
+        self.counters = c
+        self._write_info()
+        joined = " | ".join(msgs)
+        if joined and joined != self._last_node_message:
+            self._call("onOutputError", joined)
+        self._last_node_message = joined
 
     # ------------------------------------------------------------------ служебное
     @staticmethod
@@ -199,12 +237,30 @@ class DsmEngineExt:
             d.viewer = True
         return d
 
+    @staticmethod
+    def _arrow_geometry(arrows_rows: list[list[str]]) -> tuple[list[list[str]], list[list[str]]]:
+        """Стрелки направления для превью: две точки на фикстуру (начало — зелёная, конец — красная) и линия."""
+        pts = [["P(0)", "P(1)", "P(2)", "Color(0)", "Color(1)", "Color(2)", "Color(3)"]]
+        prims = [["vertices"]]
+        for k, r in enumerate(arrows_rows[1:]):
+            x1, y1, x2, y2 = r[2], r[3], r[4], r[5]
+            pts.append([x1, y1, "0", "0", "1", "0", "1"])
+            pts.append([x2, y2, "0", "1", "0", "0", "1"])
+            prims.append([f"{2 * k} {2 * k + 1}"])
+        return pts, prims
+
     def _write_tables(self, t) -> None:
+        arrow_pts, arrow_prims = self._arrow_geometry(t.arrows_rows)
+        map_sets = [["set"]] + [[r[0]] for r in t.fixture_sets[1:]] + [[r[0]] for r in t.raw_sets[1:]]   # карты DMX реплик
         pairs = {"geo_cells": t.cells_rows, "geo_prims": t.prims_rows, "geo_raw": t.raw_rows, "raw_prims": t.raw_prims_rows,
-                 "fx_arrows": t.arrows_rows, "profiles": t.profiles_rows, "delay_groups": t.delay_groups,
+                 "fx_arrows": t.arrows_rows, "arrow_pts": arrow_pts, "arrow_prims": arrow_prims, "map_sets": map_sets,
+                 "profiles": t.profiles_rows, "delay_groups": t.delay_groups,
                  "out_groups": t.out_groups, "fixture_sets": t.fixture_sets, "raw_sets": t.raw_sets}
         for name, rows in pairs.items():
             self._table(name).text = rows_to_text(rows)
+        px_top = self.ownerComp.op("diag/pixels_top")
+        if px_top is not None:
+            px_top.par.layout = self.pixels_layout
         for grp, rows in t.routing_by_group.items():
             self._table(f"routing_{grp}").text = rows_to_text(rows)
         # устаревшие таблицы маршрутизации (групп стало меньше) — очищаем, не удаляем
@@ -212,7 +268,7 @@ class DsmEngineExt:
             if d.name.startswith("routing_") and d.name[8:] not in t.routing_by_group:
                 d.text = rows_to_text([self.geometry.ROUTING_COLUMNS])
         # реплики по таблицам пересоздаются явно: репликатор не всегда замечает смену содержимого
-        for path in ("delay/rep", "fixtures/rep", "output/rep"):
+        for path in ("delay/rep", "fixtures/rep", "fixtures/rep_raw", "output/rep", "diag/rep_maps"):
             rep = self.ownerComp.op(path)
             if rep is not None:
                 rep.par.recreateall.pulse()
@@ -229,7 +285,15 @@ class DsmEngineExt:
                 ["warnings", str(sum(1 for i in self.issues if i.level.value == "warning") + len(warn))],
                 ["skipped", " | ".join(w for w in warn if "не выводится" in w)],
                 ["pixels_layout", self.pixels_layout], ["message", self.message],
-                ["fps", str(float(self.ownerComp.time.rate))], ["input", "connected" if self.ownerComp.inputs else "none"]]
+                ["fps", self.counters.get("fps", "")], ["project_rate", str(float(self.ownerComp.time.rate))],
+                ["input", self.counters.get("input", "connected" if self.ownerComp.inputs else "none")],
+                ["canvas_w", str(p.canvas.width) if p is not None else "1280"], ["canvas_h", str(p.canvas.height) if p is not None else "720"]]
+        for grp, rate in self.counters.get("rate", {}).items():
+            rows.append([f"rate_{grp}", rate])
+        for grp, cps in self.counters.get("cooks", {}).items():
+            rows.append([f"cooks_{grp}", cps])
+        for m in self.counters.get("node_messages", []):
+            rows.append(["node_message", m])
         for w in warn:
             rows.append(["warning", w])
         for i in self.issues:
