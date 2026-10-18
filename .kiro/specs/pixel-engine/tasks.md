@@ -32,7 +32,7 @@
   - Готово: `python -m pytest tests` зелёный с тестом «нет импорта td» и тривиальными тестами геометрии
   - _Requirements: 1.10, 10.5_
 
-- [ ] 1.3 Каркас компонента `dsm`
+- [x] 1.3 Каркас компонента `dsm`
   - `/project1/dsm` (baseCOMP, `parentshortcut='dsm'`), страницы пар `DSM`, `Input`, `Info` по таблице design
     с умолчаниями (`Active` выключен, `Autoreload` включён, `Pixelschop` выключен, `Id = dsm/mapper`,
     `Version = 0.1`, `Status`), файловая пара `Patchfile` через `appendFile`
@@ -227,3 +227,4 @@
   читает флаг входа через `useinputlinebreaks`; байт = floor(v·255); `autolayout` не мешает атрибутам.
   Стенд: `/project1/stand/spike` (agents_md внутри). `.toe` не закоммичен — контрольная точка в задаче 7.
 - 1.2: сигнатуры `dsm_geometry` защищены тестом `inspect.signature` — менять только вместе с design.
+- 1.3: компонент `/project1/dsm` в `td/dsm_dev.toe` (сохранён как dsm_dev.7.toe, канонический обновлён); `.toe` — на контрольной точке 7.
