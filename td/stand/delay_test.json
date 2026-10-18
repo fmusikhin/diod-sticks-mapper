@@ -1,0 +1,174 @@
+{
+  "canvas": {
+    "background": null,
+    "height": 720,
+    "px_per_m": null,
+    "units": "px",
+    "width": 1280
+  },
+  "fixture_types": [
+    {
+      "bits": 8,
+      "cell_extra": [],
+      "cells": 60,
+      "cells_per_m": 60.0,
+      "color_order": "GRB",
+      "gamma": 1.0,
+      "head": [],
+      "height": 1,
+      "id": "ft1",
+      "kind": "strip",
+      "layout": "tl_rows",
+      "length_mm": null,
+      "name": "WS2812B GRB 60/м",
+      "pitch_mm": 16.666666666666668,
+      "tail": [],
+      "watts_per_cell": null,
+      "white_balance": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "white_mode": "none",
+      "width": 1
+    }
+  ],
+  "fixtures": [
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 1,
+        "channel_offset": 0,
+        "mode": "auto",
+        "output_id": "out1",
+        "port_id": null,
+        "universe": 0
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [],
+      "id": "fx1",
+      "length_mm": 5000.0,
+      "mute": false,
+      "name": "Лента 5 м",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "kind": "line",
+        "p1": [
+          100.0,
+          360.0
+        ],
+        "p2": [
+          1180.0,
+          360.0
+        ]
+      },
+      "type_id": "ft1"
+    },
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 1,
+        "channel_offset": 0,
+        "mode": "auto",
+        "output_id": "out2",
+        "port_id": null,
+        "universe": 10
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [],
+      "id": "fx2",
+      "length_mm": 5000.0,
+      "mute": false,
+      "name": "Лента 2 (задержка)",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "kind": "line",
+        "p1": [
+          200.0,
+          300.0
+        ],
+        "p2": [
+          1100.0,
+          300.0
+        ]
+      },
+      "type_id": "ft1"
+    }
+  ],
+  "groups": [],
+  "outputs": [
+    {
+      "art_sync": false,
+      "delay_ms": 0.0,
+      "fixture_ids": [
+        "fx1"
+      ],
+      "id": "out1",
+      "ip": "127.0.0.1",
+      "name": "Лента",
+      "ports": [],
+      "priority": 100,
+      "protocol": "artnet",
+      "rate_hz": 60.0,
+      "rules": {
+        "auto_span": true,
+        "skip_511_512": false,
+        "whole_pixel": true
+      },
+      "start_universe": 0,
+      "target_kind": "unicast",
+      "universe_count": null
+    },
+    {
+      "art_sync": false,
+      "delay_ms": 50.0,
+      "fixture_ids": [
+        "fx2"
+      ],
+      "id": "out2",
+      "ip": "127.0.0.2",
+      "name": "Контроллер 2 (задержка 50 мс)",
+      "ports": [],
+      "priority": 100,
+      "protocol": "artnet",
+      "rate_hz": 60.0,
+      "rules": {
+        "auto_span": true,
+        "skip_511_512": false,
+        "whole_pixel": true
+      },
+      "start_universe": 10,
+      "target_kind": "unicast",
+      "universe_count": null
+    }
+  ],
+  "schema_version": 1
+}

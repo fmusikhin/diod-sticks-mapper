@@ -1,0 +1,22 @@
+{
+  "feature_name": "pixel-engine",
+  "created_at": "2026-10-16T12:25:15Z",
+  "updated_at": "2026-10-16T13:00:42Z",
+  "language": "ru",
+  "phase": "implementation",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": true
+    },
+    "design": {
+      "generated": true,
+      "approved": true
+    },
+    "tasks": {
+      "generated": true,
+      "approved": true
+    }
+  },
+  "ready_for_implementation": true
+}

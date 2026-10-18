@@ -10,7 +10,9 @@ from dsm_core import api
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 EXAMPLES = sorted((ROOT / "examples").glob("*.json"))
 ALLOWED = [ipaddress.ip_network("127.0.0.0/8"), ipaddress.ip_network("192.0.2.0/24"),
-           ipaddress.ip_network("239.255.0.0/16")]
+           ipaddress.ip_network("239.255.0.0/16"),
+           ipaddress.ip_network("255.255.255.255/32")]  # broadcast — не реальный адрес
+
 
 
 @pytest.mark.parametrize("path", EXAMPLES, ids=lambda p: p.stem)
@@ -31,7 +33,7 @@ def test_four_examples_present():
 def test_no_real_ips_in_repo():
     ip_re = re.compile(r"(?<![\d.])(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?![\d.])")
     bad = []
-    for folder in ("examples", "tests", "src/core"):
+    for folder in ("examples", "tests", "src/core", "src/td"):
         for f in (ROOT / folder).rglob("*"):
             if f.suffix not in (".py", ".json", ".csv", ".md", ".txt"):
                 continue

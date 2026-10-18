@@ -13,7 +13,7 @@
 | — | этап 0 (без спеки) | репозиторий, cc-sdd, steering, проверки движка в TD | 0 |
 | 1 | `patch-core` | модель патча, JSON-схема, адресация, проверки, импорт/экспорт CSV/JSON, pytest — без TD. **Реализовано** (ветка `spec/patch-core`): `docs/patch-format.md`, `docs/core-api.md` | 1 |
 | 1а | `resolume-import` | импорт пресетов Resolume Arena 7 (Advanced Output и Fixture Library) — отложено заказчиком | 1–2 |
-| 2 | `pixel-engine` | каркас tox, POP-геометрия из патча, выборка цвета, DMX-вывод, синхронизация с видео | 1 |
+| 2 | `pixel-engine` | каркас tox, POP-геометрия из патча, выборка цвета, DMX-вывод, синхронизация с видео. **Реализовано** (ветка `spec/pixel-engine`, Version 0.1): `docs/engine.md`, стенд `tools/engine_check.py` | 1 |
 | 3 | `patch-view` | карта DMX по юниверсам, выходы и правила портов, переадресация перетаскиванием, конфликты | 1 |
 | 4 | `mapping-editor` | холст INPUT / OUTPUT, инструменты, выделение, привязки, массивы, undo | 1–2 |
 | 5 | `locate-test` | Locate: мигание, соло, направление, номер на пикселях, обход, сырой адрес, лист приёмки | 1 |
@@ -252,7 +252,7 @@ patch.json
 - В TD — сверка DMX Map DAT с ожидаемой таблицей адресов, перехват Art-Net/sACN на 127.0.0.1
   байт в байт, замер стоимости кадра. Стенд с железом — в конце этапа.
 - Критерии MVP: 100 стиков × 144 px на 8 IP патчатся за 10 минут или быстрее; перехват совпадает
-  с таблицей; маппер не дороже 1 мс на кадр при 20 тыс. пикселей, 60 fps.
+  с таблицей; маппер не дороже 3 мс на кадр при 20 тыс. пикселей, 60 fps (порог пересмотрен 18.10.2026 по факту: пол `dmxfixturePOP` 1,5–1,9 мс).
 
 ## Этапы
 
@@ -286,13 +286,14 @@ patch.json
 ```
 src/core    ядро на чистом Python: пакет dsm_core — модель патча, адресация, проверки, CSV/JSON
             (`python -m pytest tests`; формат — docs/patch-format.md, API — docs/core-api.md)
-src/td      расширения и обработчики интерфейса для TouchDesigner
-src/glsl    шейдеры
-tests       тесты ядра
-td          dev-проект .toe
+src/td      слой TouchDesigner: расширение компонента dsm_engine_ext.py, строитель таблиц dsm_geometry.py
+            (чистый, pytest), шаблон колбэков (контракт — docs/engine.md)
+src/glsl    шейдеры POP (px_process.glsl — выборка и обработка ячейки)
+tests       тесты ядра и слоя TD (без TouchDesigner)
+td          dev-проект dsm_dev.toe; td/stand — синтетические патчи стенда, reports/ — отчёты (не в git)
 release     собранный dsm.tox (релизы — в GitHub Releases)
 examples    примеры патчей: ленты, стики, матрица, бар
-tools       утилиты: перехват Art-Net/sACN, клиент TD
+tools       утилиты: перехват Art-Net/sACN (dmx_listen.py), стенд в TD (engine_check.py: examples/perf/smoke/docs)
 docs        документация
 CONTRIBUTING.md  правила разработки
 CHANGELOG.md     журнал изменений

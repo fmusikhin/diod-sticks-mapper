@@ -4,7 +4,7 @@
 и складывает в JSON: по адресу назначения → по юниверсу → последние байты DMX, число пакетов
 и средний интервал между пакетами. Нужен для сверки вывода маппера байт в байт.
 
-usage: python tools/dmx_listen.py artnet|sacn SECONDS OUT.json [--bind 127.0.0.1,127.0.0.2]
+usage: python tools/dmx_listen.py artnet|sacn SECONDS OUT.json [--bind 127.0.0.1,127.0.0.2] [--mcast 239.255.0.1]
 
 Art-Net: юниверс — 15-битный port-address (SubUni | Net<<8), как в пакете ArtDmx.
 sACN:    юниверс — как в пакете E1.31 (с 1).
@@ -48,6 +48,8 @@ def main():
     ap.add_argument('out')
     ap.add_argument('--bind', default='127.0.0.1',
                     help='локальные адреса через запятую; на каждый — свой сокет')
+    ap.add_argument('--mcast', default='',
+                    help='multicast-группы sACN через запятую (239.255.x.y) — присоединиться на каждом сокете')
     a = ap.parse_args()
 
     port = ARTNET_PORT if a.proto == 'artnet' else SACN_PORT
@@ -58,6 +60,13 @@ def main():
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((ip, port))
         s.setblocking(False)
+        for grp in [g for g in a.mcast.split(',') if g]:
+            iface = ip if ip != '0.0.0.0' else '127.0.0.1'
+            try:
+                s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+                             socket.inet_aton(grp) + socket.inet_aton(iface))
+            except OSError as e:
+                print('mcast join failed', grp, iface, e)
         socks[s] = ip
 
     # dst ip -> universe -> {data, count, times}
