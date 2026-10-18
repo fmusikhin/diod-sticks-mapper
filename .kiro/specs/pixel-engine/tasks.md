@@ -147,7 +147,7 @@
     два канала на компонент (старший первым)
   - _Requirements: 5.2, 5.3, 5.4, 6.1_
 
-- [ ] 4.5 Узлы вывода и маршрутизация
+- [x] 4.5 Узлы вывода и маршрутизация
   - `output/`: `replicatorCOMP` по `out_groups`; `tpl_out`: `dmxoutPOP` (`interface` по протоколу, `multicast`,
     `netaddress = 127.0.0.1`, `routingtable = ./routing`, `rate = min(rate_hz, me.time.rate)`, `sendartsync`,
     `localaddress ← Localaddress`, `viewer = False`), ссылки `fixture<i>pop` на `dmxfixturePOP` своей группы;
@@ -242,3 +242,6 @@
 - 4.4: блок профиля `dmxfixturePOP` принимает список атрибутов через пробел (порядок каналов), `merge` даёт «цвет, затем extra»
   на ячейку, b16 — старший байт первым; cell_extra > 4 каналов пока обрезается (предупреждение — в 5.1); карты dmxmapDAT
   заполняются ~25 кадров после пересборки; реплики пересоздаёт расширение после записи таблиц (пульс recreateall).
+- 4.5: dmxoutPOP шлёт все юниверсы указанных фикстур → dmxfixturePOP реплицируется на (профиль × группа вывода): таблицы
+  fixture_sets/raw_sets; `active` и `rate` на узлах — константы от расширения (ApplyActive, колбэк репликатора), rate
+  пересчитывается при перезагрузке патча; ArtSync широковещательный — перехват на 0.0.0.0; td/stand/output_test.json.

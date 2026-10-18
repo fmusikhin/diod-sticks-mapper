@@ -33,3 +33,7 @@ Thumbs.db
 desktop.ini
 .DS_Store
 .claude/settings.local.json
+
+# Отчёты и перехваты стенда pixel-engine
+td/stand/reports/
+td/stand/smoke.toe

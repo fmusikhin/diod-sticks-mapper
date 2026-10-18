@@ -32,6 +32,8 @@ class GeoTables:
     profiles_rows: Rows = field(default_factory=list)    # prof, type_id, color_order, bits, extra
     delay_groups: Rows = field(default_factory=list)     # dgrp, frames, delay_ms
     out_groups: Rows = field(default_factory=list)       # grp, protocol, multicast, rate_hz, art_sync, output_ids
+    fixture_sets: Rows = field(default_factory=list)     # set = (профиль × группа вывода): реплика dmxfixturePOP
+    raw_sets: Rows = field(default_factory=list)         # группы вывода, у которых есть служебные каналы head/tail
     routing_by_group: dict[str, Rows] = field(default_factory=dict)  # grp → net subnet universe netaddress priority
     warnings: tuple[str, ...] = ()                       # формы и выборки, не поддержанные в этой версии
 
@@ -118,11 +120,13 @@ def to_px(canvas: Canvas, xy: Point) -> Point:
 
 # ---------- строки таблиц (2.2–2.3) ----------
 
-CELL_COLUMNS = ["P(0)", "P(1)", "P(2)", "Tex(0)", "Tex(1)", "Tex(2)", "cell", "fx", "prof", "dgrp", "active", "bright",
+CELL_COLUMNS = ["P(0)", "P(1)", "P(2)", "Tex(0)", "Tex(1)", "Tex(2)", "cell", "fx", "prof", "dgrp", "ogrp", "active", "bright",
                 "col(0)", "col(1)", "col(2)", "mute", "Color(0)", "Color(1)", "Color(2)", "Color(3)"]
 PRIM_COLUMNS = ["vertices", "fx", "seg", "DMXFixtureUniverse", "DMXFixtureChannel",
                 "DMXFixtureNetAddress(0)", "DMXFixtureNetAddress(1)", "DMXFixtureNetAddress(2)", "DMXFixtureNetAddress(3)"]
-RAW_COLUMNS = ["v", "fx", "dgrp"]
+RAW_COLUMNS = ["v", "fx", "dgrp", "ogrp"]
+SET_COLUMNS = ["set", "prof", "ogrp", "type_id", "grp"]
+RAW_SET_COLUMNS = ["set", "ogrp", "grp"]
 ARROW_COLUMNS = ["fx", "fixture_id", "x1", "y1", "x2", "y2"]
 PROFILE_COLUMNS = ["prof", "type_id", "name", "color_order", "bits", "channels_per_cell", "extra_defaults"]
 DELAY_COLUMNS = ["dgrp", "frames", "delay_ms"]
@@ -217,6 +221,9 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
 
     delay_of, frames_of_group = _delay_groups(patch, fps)
     groups = _out_groups(patch)
+    ogrp_of: dict[str, int] = {oid: k for k, ids in enumerate(groups.values()) for oid in ids}
+    sets: dict[tuple[int, int], str] = {}
+    raw_groups: set[int] = set()
     for ids in groups.values():
         missing = [oid for oid in ids if outputs[oid].ip is None and outputs[oid].target_kind == TargetKind.UNICAST]
         if missing:
@@ -253,7 +260,8 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
         n = len(order)
         by_grid = _positions_by_grid(patch.canvas, ft, fx, n)
         pos = [by_grid[c.grid_index] for c in order]
-        dgrp, prof = delay_of[out.id], prof_index[ft.id]
+        dgrp, prof, ogrp = delay_of[out.id], prof_index[ft.id], ogrp_of[out.id]
+        sets.setdefault((prof, ogrp), ft.id)
         bright = _f(fx.brightness)
         colr, colg, colb = (_f(c) for c in fx.color)
         mute = "1" if fx.mute else "0"
@@ -272,7 +280,7 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
                     c = order[di]
                     x, y = pos[di]
                     cells_rows.append([_f(x), _f(y), "0", _f(x / patch.canvas.width), _f(y / patch.canvas.height), "0",
-                                       str(di), str(fx_i), str(prof), str(dgrp), "1" if c.active else "0",
+                                       str(di), str(fx_i), str(prof), str(dgrp), str(ogrp), "1" if c.active else "0",
                                        bright, colr, colg, colb, mute, "0", "0", "0", "1"])
                     verts.append(str(len(cells_rows) - 2))
                     placed.add(di)
@@ -281,8 +289,9 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
                 block = ft.head if sg.kind == "head" else ft.tail
                 vals = _block_values(block)[: sg.last_channel - sg.first_channel + 1]
                 verts = []
+                raw_groups.add(ogrp)
                 for v in vals:
-                    raw_rows.append([_f(v), str(fx_i), str(dgrp)])
+                    raw_rows.append([_f(v), str(fx_i), str(dgrp), str(ogrp)])
                     verts.append(str(len(raw_rows) - 2))
                 raw_prims_rows.append([" ".join(verts), str(fx_i), str(seg_i), *addr])
         if n:
@@ -306,11 +315,14 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
             rows.append([str(net), str(subnet), str(uni), ip, row[col["priority"]], ""])
         routing_by_group[grp] = rows
 
+    set_rows: Rows = [SET_COLUMNS[:]] + [[f"p{pr}g{og}", str(pr), str(og), tid, f"g{og}"] for (pr, og), tid in sorted(sets.items())]
+    raw_set_rows: Rows = [RAW_SET_COLUMNS[:]] + [[f"raw_g{og}", str(og), f"g{og}"] for og in sorted(raw_groups)]
     return GeoTables(cells_rows=cells_rows, prims_rows=prims_rows, raw_rows=raw_rows, raw_prims_rows=raw_prims_rows,
                      arrows_rows=arrows_rows, profiles_rows=profiles_rows, delay_groups=delay_rows,
-                     out_groups=out_rows, routing_by_group=routing_by_group, warnings=tuple(warnings))
+                     out_groups=out_rows, fixture_sets=set_rows, raw_sets=raw_set_rows, routing_by_group=routing_by_group,
+                     warnings=tuple(warnings))
 
 
 __all__ = ["GeoTables", "Point", "Rows", "cell_positions", "grid_for_data", "rect_grid", "to_px", "build_tables",
-           "CELL_COLUMNS", "PRIM_COLUMNS", "RAW_COLUMNS", "ARROW_COLUMNS", "PROFILE_COLUMNS", "DELAY_COLUMNS",
+           "CELL_COLUMNS", "PRIM_COLUMNS", "RAW_COLUMNS", "SET_COLUMNS", "RAW_SET_COLUMNS", "ARROW_COLUMNS", "PROFILE_COLUMNS", "DELAY_COLUMNS",
            "OUT_GROUP_COLUMNS", "ROUTING_COLUMNS"]

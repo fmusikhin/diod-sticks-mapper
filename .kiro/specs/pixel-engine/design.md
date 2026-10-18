@@ -192,16 +192,19 @@ dsm (baseCOMP, parentshortcut='dsm', ext0object=op('./engine_ext').module.DsmEng
 │   callbacks (DAT, par Callbacks), px_process_glsl (DAT ↔ src/glsl/px_process.glsl)
 ├── in1 (inTOP)                                   # единственный вход
 ├── input/        crop → resize → levels → in_prepared (nullTOP)
-├── tables/       geo_cells, geo_prims, geo_raw, raw_prims, fx_arrows, profiles, delay_groups, out_groups, routing_<grp>, info (tableDAT)
+├── tables/       geo_cells, geo_prims, geo_raw, raw_prims, fx_arrows, profiles, delay_groups, out_groups, fixture_sets, raw_sets,
+│                 routing_<grp>, info (tableDAT)
 ├── engine/       pts_cells (dattoPOP: geo_cells + geo_prims → line strip с uint-адресами на примитиве)
 │                 → px_process (glslPOP, sampler=in_prepared) → px_out (nullPOP)
 │                 pts_raw (dattoPOP: geo_raw + raw_prims) → raw_out (nullPOP)
 ├── hook/         in1 (inPOP) → out1 (outPOP)     # точка подключения
 ├── delay/        rep (replicatorCOMP по delay_groups, master ../templates/delay_tpl) → grp<k>/{sel, keep (deletePOP dgrp==k), cache (cachePOP)}
 │                 → merge_delay (mergePOP) → px_final (nullPOP)
-├── fixtures/     rep (replicatorCOMP по profiles, master ../templates/fx_tpl) → prof<k>/{sel, keep (deletePOP prof==k), attrs,
-│                 fixture (dmxfixturePOP), map (dmxmapDAT)}; fixture_raw (dmxfixturePOP, active при наличии geo_raw) + map_raw
-├── output/       rep_out (replicatorCOMP по out_groups) → tpl_out/{out (dmxoutPOP), routing (tableDAT)}
+├── fixtures/     rep (replicatorCOMP по fixture_sets = профиль × группа вывода, master ../templates/fx_tpl) → p<k>g<j>/{sel,
+│                 keep (deletePOP prof==k и ogrp==j), attrs, fixture (dmxfixturePOP), map (dmxmapDAT)};
+│                 rep_raw (по raw_sets — группы с head/tail, master ../templates/raw_tpl) → raw_g<j>/{sel, keep ogrp==j, fixture, map}
+├── output/       rep (replicatorCOMP по out_groups, master ../templates/out_tpl) → out_g<j>/out (dmxoutPOP: interface, multicast,
+│                 rate, sendartsync, routingtable=../../tables/routing_g<j>, fixture<i>pop → ../fixtures/p<k>g<j> и raw_g<j>; active — константа от ApplyActive)
 ├── diag/         preview (renderTOP над in_prepared + точки), pixels_top (poptoTOP), pixels_chop (poptoCHOP),
 │                 dmxmap_all (mergeDAT), counters (timerCHOP 1 Гц → расширение)
 ├── watch/        watch_folder (folderDAT), watch_exec (datexecuteDAT → Reload)
@@ -320,7 +323,7 @@ flowchart LR
 | 5.5 | квантование совпадает со стендом | правило `floor(v·255)` (спайк 1.1); `engine_check` сравнивает | `cell_table` | проверка |
 | 5.6 | точка подключения между выборкой и выводом | `hook/` (`inPOP → outPOP`) | атрибуты `Color`, `fx`, `cell`, `active` | кадр |
 | 5.7 | всё на GPU; смена Master/Active — без пересборки | `px_process` униформ, `out.active` | — | кадр |
-| 6.1 | один `dmxfixturePOP` на профиль, один `dmxoutPOP` на группу | `fixtures/`, `output/` репликаторы | `profiles`, `out_groups` | — |
+| 6.1 | `dmxfixturePOP` на (профиль, группа), `dmxoutPOP` на группу | `fixtures/`, `output/` репликаторы | `fixture_sets`, `raw_sets`, `out_groups` | — |
 | 6.2 | маршрутизация ядра: цель, протокол, priority | `output/*/routing` из `routing_table` | колонки `net subnet universe netaddress priority` | — |
 | 6.3 | юниверс без изменений: port-address / сквозной | `build_tables.routing_by_group` (`from_port_address` для Art-Net net/subnet/universe) | `dsm_core.protocol` | — |
 | 6.4 | нет IP → 127.0.0.1 + предупреждение | `routing_by_group` (`ip or '127.0.0.1'`), info `target_missing` | — | — |
@@ -438,6 +441,7 @@ class DsmEngineExt:
     def Reload(self) -> bool         # загрузить par.Patchfile; True — успех; при ошибке таблицы не трогаются
     def LoadPatch(self, path: str) -> bool   # то же для явного пути (без записи в пару)
     def ReportError(self, message: str) -> None   # info + onOutputError
+    def ApplyActive(self) -> None    # out.active = Active and status == ok — константа на узлах (политика в Python по событию, не выражение в кадре)
     def UpdateCounters(self) -> None # раз в секунду по timerCHOP: fps, rate, куки, предупреждения узлов, вход
 ```
 - Preconditions: `Reload` — пара `Patchfile` не пуста; путь разрешается относительно `project.folder`.
@@ -523,10 +527,12 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
   умолчания `cell_extra` профиля), `fixture` (`dmxfixturePOP`): блок 0 `RGB`: `attr` — список по буквам `color_order`
   (`Color(0|1|2)`, для `W`/`A` без значения — `zero`), `valueres=b8|b16`, `normalized`; блок 1 `EX` (`attr=ex`, `merge`)
   при наличии `cell_extra` (до 4 каналов, 8 бит). Настройку реплики делает колбэк репликатора по строке `profiles`. `fixture_raw`: один блок `v`, 8 бит, normalized. `map` (`dmxmapDAT`).
-- `output/tpl_out`: `out` (`dmxoutPOP`): `interface` по протоколу, `multicast`, `netaddress=127.0.0.1`,
-  `routingtable=./routing`, `rate` = `min(rate_hz, me.time.rate)`, `sendartsync`, `priority` по умолчанию,
-  `localaddress` ← пара, `active` = `parent.dsm.par.Active and status ok`, `viewer=False`;
-  `fixture<i>pop` — ссылки на `dmxfixturePOP` своей группы.
+- `output/out_g<j>`: `out` (`dmxoutPOP`): `interface` по протоколу, `multicast`, `netaddress=127.0.0.1`,
+  `routingtable=../../tables/routing_g<j>`, `rate` = `min(rate_hz, fps проекта)` (константа при загрузке), `sendartsync`,
+  `localaddress` ← пара (bind), `active` — константа от `ApplyActive` (Active ∧ status ok), `viewer=False`;
+  `fixture<i>pop` — ссылки на `dmxfixturePOP` своей группы: `p<k>g<j>` и `raw_g<j>`. Юниверс принадлежит ровно одной
+  группе, поэтому `dmxfixturePOP` реплицируется на пару (профиль, группа) — число узлов зависит от числа профилей
+  и различных настроек выходов, не от числа контроллеров (6.1, 6.5). ArtSync уходит широковещательно (слушать на 0.0.0.0).
 - Idempotency: цепочка детерминирована от таблиц; повторная загрузка того же патча → те же байты.
 
 **Implementation Notes**

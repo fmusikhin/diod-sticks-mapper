@@ -15,7 +15,7 @@ from typing import Literal
 Status = Literal["no patch", "ok", "error"]
 
 TABLE_NAMES = ("geo_cells", "geo_prims", "geo_raw", "raw_prims", "fx_arrows", "profiles", "delay_groups", "out_groups",
-               "info")
+               "fixture_sets", "raw_sets", "info")
 INFO_KEYS = ("status", "patch_path", "fixtures", "cells", "universes", "outputs", "errors", "warnings", "skipped",
              "pixels_layout", "message", "fps", "input")
 
@@ -50,7 +50,7 @@ def rows_to_text(rows: list[list[str]]) -> str:
 
 
 class DsmEngineExt:
-    """Публичные методы (с заглавной — промоутятся на COMP): Reload, LoadPatch, ReportError, CheckFile,
+    """Публичные методы (с заглавной — промоутятся на COMP): Reload, LoadPatch, ReportError, ApplyActive, CheckFile,
     PatchDir, PatchName, ResolvePath, UpdateCounters."""
 
     def __init__(self, ownerComp) -> None:
@@ -111,6 +111,7 @@ class DsmEngineExt:
             self.patch, self.issues, self.tables, self.loaded_mtime = None, [], None, None
             self._set_status("no patch", "")
             self._write_info()
+            self.ApplyActive()
             return False
         return self.LoadPatch(raw)
 
@@ -140,8 +141,21 @@ class DsmEngineExt:
         self._write_tables(tables)
         self._set_status("ok", "; ".join(notes))
         self._write_info()
+        self.ApplyActive()
         self._call("onPatchLoaded", patch, list(issues))
         return True
+
+    def ApplyActive(self) -> None:
+        """Политика отправки: узлы вывода активны, только если пара Active включена и патч загружен (status ok).
+        Константа на узле, а не выражение — в кадре Python не исполняется."""
+        on = bool(self.ownerComp.par.Active.eval()) and self.status == "ok"
+        out = self.ownerComp.op("output")
+        if out is None:
+            return
+        for comp in out.children:
+            o = comp.op("out") if comp.isCOMP else None
+            if o is not None and o.OPType == "dmxoutPOP":
+                o.par.active = on
 
     def ReportError(self, message: str) -> None:
         """Статус error, текст в info, колбэк onOutputError. Геометрия и вывод не меняются."""
@@ -149,6 +163,7 @@ class DsmEngineExt:
         self.loaded_mtime = os.path.getmtime(full) if full and os.path.exists(full) else None  # не дёргать Reload по кругу
         self._set_status("error", message)
         self._write_info()
+        self.ApplyActive()
         self._call("onOutputError", message)
 
     # ------------------------------------------------------------------ задача 5.1
@@ -187,7 +202,7 @@ class DsmEngineExt:
     def _write_tables(self, t) -> None:
         pairs = {"geo_cells": t.cells_rows, "geo_prims": t.prims_rows, "geo_raw": t.raw_rows, "raw_prims": t.raw_prims_rows,
                  "fx_arrows": t.arrows_rows, "profiles": t.profiles_rows, "delay_groups": t.delay_groups,
-                 "out_groups": t.out_groups}
+                 "out_groups": t.out_groups, "fixture_sets": t.fixture_sets, "raw_sets": t.raw_sets}
         for name, rows in pairs.items():
             self._table(name).text = rows_to_text(rows)
         for grp, rows in t.routing_by_group.items():
@@ -196,6 +211,11 @@ class DsmEngineExt:
         for d in self.ownerComp.op("tables").children:
             if d.name.startswith("routing_") and d.name[8:] not in t.routing_by_group:
                 d.text = rows_to_text([self.geometry.ROUTING_COLUMNS])
+        # реплики по таблицам пересоздаются явно: репликатор не всегда замечает смену содержимого
+        for path in ("delay/rep", "fixtures/rep", "output/rep"):
+            rep = self.ownerComp.op(path)
+            if rep is not None:
+                rep.par.recreateall.pulse()
 
     def _write_info(self) -> None:
         p, t = self.patch, self.tables

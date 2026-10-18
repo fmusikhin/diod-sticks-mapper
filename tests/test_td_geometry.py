@@ -304,3 +304,22 @@ def test_sacn_multicast_routing_with_priority():
     assert not any("127.0.0.1" in w for w in t.warnings)
     ip = _col(t.prims_rows, "DMXFixtureNetAddress(0)")
     assert t.prims_rows[1][ip:ip + 4] == ["239", "255", "0", "1"]
+
+
+def test_fixture_sets_profile_times_group():
+    outs = [output("out1", start=0, ip="127.0.0.1", fixture_ids=("fx1", "fx2")),
+            output("out2", start=40, ip="127.0.0.2", fixture_ids=("fx3",), art_sync=True)]
+    ft2 = rgb_type("ft2", cells=5, order="GRB")
+    fxs = [fixture("fx1"), fixture("fx2", "ft2", x=10.0), fixture("fx3", "ft2", "out2", x=20.0)]
+    p, issues, t = _tables(make_patch([rgb_type(cells=10), ft2], fxs, outs))
+    assert t.fixture_sets[1:] == [["p0g0", "0", "0", "ft1", "g0"], ["p1g0", "1", "0", "ft2", "g0"], ["p1g1", "1", "1", "ft2", "g1"]]
+    og = _col(t.cells_rows, "ogrp"); fxc = _col(t.cells_rows, "fx")
+    assert {r[fxc] for r in t.cells_rows[1:] if r[og] == "1"} == {"2"}
+    assert _col(t.raw_rows, "ogrp") == 3
+    assert t.raw_sets == [["set", "ogrp", "grp"]]            # служебных каналов нет — реплик raw нет
+
+
+def test_raw_sets_only_for_groups_with_head_tail():
+    p, _ = api.load(ROOT / "examples" / "bar_common_channels.json")
+    p, issues, t = _tables(p)
+    assert t.raw_sets[1:] == [["raw_g0", "0", "g0"]]
