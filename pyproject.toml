@@ -1,4 +1,4 @@
 [tool.pytest.ini_options]
-pythonpath = ["src/core"]
+pythonpath = ["src/core", "src/td"]
 testpaths = ["tests"]
 addopts = "-q"

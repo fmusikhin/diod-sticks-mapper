@@ -1,9 +1,12 @@
-"""11.1, 11.2: ядро — синтаксис Python 3.11 и только стандартная библиотека."""
+"""11.1, 11.2: ядро — синтаксис Python 3.11 и только стандартная библиотека.
+
+pixel-engine 10.5: модули src/td — тоже Python 3.11; dsm_geometry без td и numpy."""
 import ast
 import pathlib
 import sys
 
 CORE = pathlib.Path(__file__).resolve().parents[1] / "src" / "core" / "dsm_core"
+TD_SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "td"
 STDLIB = set(sys.stdlib_module_names)
 FORBIDDEN = {"td", "numpy", "jsonschema", "pydantic"}
 
@@ -15,7 +18,7 @@ def _modules():
 
 
 def test_parses_as_python_311():
-    for f in _modules():
+    for f in _modules() + sorted(TD_SRC.glob("*.py")):
         ast.parse(f.read_text(encoding="utf-8"), filename=str(f), feature_version=(3, 11))
 
 

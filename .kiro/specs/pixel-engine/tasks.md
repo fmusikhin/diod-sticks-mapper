@@ -22,7 +22,7 @@
     (`primAttributes`, строки карты) и правило квантования
   - _Requirements: 3.1, 3.2, 5.5_
 
-- [ ] 1.2 Файлы-источники слоя TD и тестовая обвязка
+- [x] 1.2 Файлы-источники слоя TD и тестовая обвязка
   - Заглушки четырёх файлов из File Structure Plan: `src/td/dsm_geometry.py` (сигнатуры design, тела `NotImplementedError`),
     `src/td/dsm_engine_ext.py` (класс с `__init__`, подключение `src/core` в `sys.path` относительным путём),
     `src/td/dsm_callbacks_default.py` (пустые `onPatchLoaded`, `onOutputError`), `src/glsl/px_process.glsl` (проходной шейдер)
@@ -226,3 +226,4 @@
   без `linebreakPOP`/`attributeconvertPOP`; `Color` в `dattoPOP` задавать блоком типа `color`; `linebreakPOP`
   читает флаг входа через `useinputlinebreaks`; байт = floor(v·255); `autolayout` не мешает атрибутам.
   Стенд: `/project1/stand/spike` (agents_md внутри). `.toe` не закоммичен — контрольная точка в задаче 7.
+- 1.2: сигнатуры `dsm_geometry` защищены тестом `inspect.signature` — менять только вместе с design.

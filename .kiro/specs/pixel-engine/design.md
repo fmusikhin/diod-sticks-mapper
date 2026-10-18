@@ -470,14 +470,15 @@ class GeoTables:
     prims_rows: list[list[str]]       # заголовок + строка на сегмент ячеек: vertices + uint-адрес
     raw_rows: list[list[str]]         # заголовок + строка на служебный канал head/tail
     raw_prims_rows: list[list[str]]   # строка на сегмент head/tail
+    arrows_rows: list[list[str]]      # fx_arrows: фикстура, первая и последняя ячейка в px (превью, 9.2)
     profiles_rows: list[list[str]]    # prof, type_id, color_order, bits, n_extra, extra_defaults
     delay_groups: list[list[str]]     # dgrp, frames, delay_ms
     out_groups: list[list[str]]       # grp, protocol, multicast, rate_hz, art_sync, output_ids
     routing_by_group: dict[str, list[list[str]]]   # grp → net subnet universe netaddress priority
     warnings: list[str]               # формы и выборки, не поддержанные в этой версии; target_missing
 
-def cell_positions(shape: Shape, n: int, direction: str, cell_offset: int) -> list[tuple[float, float]]
-def rect_grid(shape: RectShape, w: int, h: int) -> list[tuple[float, float]]     # клетка (col,row) → центр
+def cell_positions(shape: Shape, n: int, direction: Direction, cell_offset: int) -> list[tuple[float, float]]   # в порядке данных
+def rect_grid(shape: RectShape, width: int, height: int) -> list[tuple[float, float]]     # клетка (col,row) → центр
 def to_px(canvas: Canvas, xy: tuple[float, float]) -> tuple[float, float]
 def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Segment]],
                  routing: list[list[str]], fps: float) -> GeoTables
