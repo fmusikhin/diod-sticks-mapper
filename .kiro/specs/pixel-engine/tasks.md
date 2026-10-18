@@ -137,7 +137,7 @@
     одна реплика, `px_final` = `hook/out1`
   - _Requirements: 7.1, 7.5, 7.6_
 
-- [ ] 4.4 Профили DMX и карта
+- [x] 4.4 Профили DMX и карта
   - `fixtures/`: `replicatorCOMP` по `profiles`; `tpl_profile`: `deletePOP` (keep `prof == i`) → `dmxfixturePOP`
     с блоком цвета (`Color` с перестановкой по `color_order`, `b8`/`b16`, normalized), блоками `cell_extra`
     константами с `merge`, `W`/`A` без значения — константа 0; `dmxmapDAT` на каждый; `fixture_raw`
@@ -239,3 +239,6 @@
   и только внутри одной сети (engine отдаёт данные через outPOP).
 - 4.3: мастера репликаторов — в `templates` (allowCooking=False на COMP), иначе шаблон кукается и дублирует вывод;
   `mergePOP` сжимает входы при disconnect — отключать вход 0 в цикле; группа 0 идёт через cachePOP size 1/index 0.
+- 4.4: блок профиля `dmxfixturePOP` принимает список атрибутов через пробел (порядок каналов), `merge` даёт «цвет, затем extra»
+  на ячейку, b16 — старший байт первым; cell_extra > 4 каналов пока обрезается (предупреждение — в 5.1); карты dmxmapDAT
+  заполняются ~25 кадров после пересборки; реплики пересоздаёт расширение после записи таблиц (пульс recreateall).

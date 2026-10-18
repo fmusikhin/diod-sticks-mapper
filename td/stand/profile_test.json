@@ -1,0 +1,185 @@
+{
+  "canvas": {
+    "background": null,
+    "height": 720,
+    "px_per_m": null,
+    "units": "px",
+    "width": 1280
+  },
+  "fixture_types": [
+    {
+      "bits": 16,
+      "cell_extra": [
+        {
+          "bits": 8,
+          "default": 204,
+          "name": "dim",
+          "role": "control"
+        }
+      ],
+      "cells": 4,
+      "cells_per_m": null,
+      "color_order": "RGB",
+      "gamma": 1.0,
+      "head": [],
+      "height": 1,
+      "id": "ft16",
+      "kind": "stick",
+      "layout": "tl_rows",
+      "length_mm": null,
+      "name": "RGB 16 бит + dim",
+      "pitch_mm": null,
+      "tail": [],
+      "watts_per_cell": null,
+      "white_balance": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "white_mode": "none",
+      "width": 1
+    },
+    {
+      "bits": 8,
+      "cell_extra": [],
+      "cells": 4,
+      "cells_per_m": null,
+      "color_order": "GRBW",
+      "gamma": 1.0,
+      "head": [],
+      "height": 1,
+      "id": "ftw",
+      "kind": "stick",
+      "layout": "tl_rows",
+      "length_mm": null,
+      "name": "GRBW 8 бит",
+      "pitch_mm": null,
+      "tail": [],
+      "watts_per_cell": null,
+      "white_balance": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "white_mode": "none",
+      "width": 1
+    }
+  ],
+  "fixtures": [
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 1,
+        "channel_offset": 0,
+        "mode": "auto",
+        "output_id": "out1",
+        "port_id": null,
+        "universe": 0
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [],
+      "id": "fx1",
+      "length_mm": null,
+      "mute": false,
+      "name": "16 бит",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "kind": "line",
+        "p1": [
+          100.0,
+          100.0
+        ],
+        "p2": [
+          500.0,
+          100.0
+        ]
+      },
+      "type_id": "ft16"
+    },
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 29,
+        "channel_offset": 0,
+        "mode": "auto",
+        "output_id": "out1",
+        "port_id": null,
+        "universe": 0
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [],
+      "id": "fx2",
+      "length_mm": null,
+      "mute": false,
+      "name": "GRBW",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "kind": "line",
+        "p1": [
+          100.0,
+          300.0
+        ],
+        "p2": [
+          500.0,
+          300.0
+        ]
+      },
+      "type_id": "ftw"
+    }
+  ],
+  "groups": [],
+  "outputs": [
+    {
+      "art_sync": false,
+      "delay_ms": 0.0,
+      "fixture_ids": [
+        "fx1",
+        "fx2"
+      ],
+      "id": "out1",
+      "ip": "127.0.0.1",
+      "name": "Тест профилей",
+      "ports": [],
+      "priority": 100,
+      "protocol": "artnet",
+      "rate_hz": 60.0,
+      "rules": {
+        "auto_span": true,
+        "skip_511_512": false,
+        "whole_pixel": true
+      },
+      "start_universe": 0,
+      "target_kind": "unicast",
+      "universe_count": null
+    }
+  ],
+  "schema_version": 1
+}
