@@ -118,7 +118,7 @@ def to_px(canvas: Canvas, xy: Point) -> Point:
 
 # ---------- строки таблиц (2.2–2.3) ----------
 
-CELL_COLUMNS = ["P(0)", "P(1)", "P(2)", "Tex(0)", "Tex(1)", "cell", "fx", "prof", "dgrp", "active", "bright",
+CELL_COLUMNS = ["P(0)", "P(1)", "P(2)", "Tex(0)", "Tex(1)", "Tex(2)", "cell", "fx", "prof", "dgrp", "active", "bright",
                 "col(0)", "col(1)", "col(2)", "mute", "Color(0)", "Color(1)", "Color(2)", "Color(3)"]
 PRIM_COLUMNS = ["vertices", "fx", "seg", "DMXFixtureUniverse", "DMXFixtureChannel",
                 "DMXFixtureNetAddress(0)", "DMXFixtureNetAddress(1)", "DMXFixtureNetAddress(2)", "DMXFixtureNetAddress(3)"]
@@ -271,7 +271,7 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
                 for di in idx:
                     c = order[di]
                     x, y = pos[di]
-                    cells_rows.append([_f(x), _f(y), "0", _f(x / patch.canvas.width), _f(y / patch.canvas.height),
+                    cells_rows.append([_f(x), _f(y), "0", _f(x / patch.canvas.width), _f(y / patch.canvas.height), "0",
                                        str(di), str(fx_i), str(prof), str(dgrp), "1" if c.active else "0",
                                        bright, colr, colg, colb, mute, "0", "0", "0", "1"])
                     verts.append(str(len(cells_rows) - 2))

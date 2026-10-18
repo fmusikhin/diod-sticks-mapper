@@ -115,7 +115,7 @@
     вход 1920×1080 с `Maxres = 1280` даёт 1280×720; без входа — чёрный кадр
   - _Requirements: 1.9, 4.1, 4.2, 4.6_
 
-- [ ] 4.2 Геометрия из таблиц, выборка и обработка цвета
+- [x] 4.2 Геометрия из таблиц, выборка и обработка цвета
   - `engine/`: `pts_cells` (`dattoPOP`: `geo_cells` + `geo_prims`, `primtype=linestrips`, типы колонок и
     `primattr` uint явно — путь B спайка 1.1) → `px_process` (`glslPOP`) → `px_out`; то же для `geo_raw` + `raw_prims` → `raw_out`
   - Шейдер `px_process.glsl`: `Color = texture(in_prepared, Tex) · uMaster · bright · col · (1 − mute) · active`,
@@ -234,3 +234,6 @@
   в `sys.path` — только `src/core`; `folderDAT.names` сравнивает имя БЕЗ расширения; колбэки parexec/datexec
   выполняются в куке, не внутри вызвавшего скрипта — проверять через кадр; провода только внутри одной сети
   (источник для `dsm` — `selectTOP` рядом с ним).
+- 4.2: API glslPOP — чтение `TDIn_<Attr>(вход, id)`, запись `<Attr>[id]` (не `TDInPoint_`/`oTDPoint_` — это glsladvancedPOP);
+  `Tex` в POP трёхкомпонентный → в geo_cells колонка Tex(2)=0; COMP→COMP провода — `inputConnectors[i].connect(src.outputConnectors[j])`
+  и только внутри одной сети (engine отдаёт данные через outPOP).
