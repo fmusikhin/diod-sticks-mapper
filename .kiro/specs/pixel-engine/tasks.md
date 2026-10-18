@@ -127,7 +127,7 @@
   - _Depends: 1.1, 3.1_
   - _Requirements: 3.1, 3.2, 3.3, 3.9, 4.3, 4.5, 4.7, 5.1, 5.6, 5.7_
 
-- [ ] 4.3 Группы задержки
+- [x] 4.3 Группы задержки
   - `delay/`: `replicatorCOMP` по `delay_groups`; шаблон `tpl_delay`: `deletePOP` (keep `dgrp == k`, line strip
     удаляется целиком) → `cachePOP` (`cachesize = frames + 1`, `outputindex = −frames`, единицы frames);
     группа 0 — без кэша; `mergePOP` → `px_final`
@@ -237,3 +237,5 @@
 - 4.2: API glslPOP — чтение `TDIn_<Attr>(вход, id)`, запись `<Attr>[id]` (не `TDInPoint_`/`oTDPoint_` — это glsladvancedPOP);
   `Tex` в POP трёхкомпонентный → в geo_cells колонка Tex(2)=0; COMP→COMP провода — `inputConnectors[i].connect(src.outputConnectors[j])`
   и только внутри одной сети (engine отдаёт данные через outPOP).
+- 4.3: мастера репликаторов — в `templates` (allowCooking=False на COMP), иначе шаблон кукается и дублирует вывод;
+  `mergePOP` сжимает входы при disconnect — отключать вход 0 в цикле; группа 0 идёт через cachePOP size 1/index 0.

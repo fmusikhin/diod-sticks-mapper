@@ -197,14 +197,15 @@ dsm (baseCOMP, parentshortcut='dsm', ext0object=op('./engine_ext').module.DsmEng
 │                 → px_process (glslPOP, sampler=in_prepared) → px_out (nullPOP)
 │                 pts_raw (dattoPOP: geo_raw + raw_prims) → raw_out (nullPOP)
 ├── hook/         in1 (inPOP) → out1 (outPOP)     # точка подключения
-├── delay/        rep_delay (replicatorCOMP по delay_groups) → tpl_delay/{keep (deletePOP dgrp==k), cache (cachePOP)}
+├── delay/        rep (replicatorCOMP по delay_groups, master ../templates/delay_tpl) → grp<k>/{sel, keep (deletePOP dgrp==k), cache (cachePOP)}
 │                 → merge_delay (mergePOP) → px_final (nullPOP)
-├── fixtures/     rep_profiles (replicatorCOMP по profiles) → tpl_profile/{keep (deletePOP prof==i), fixture (dmxfixturePOP),
-│                 map (dmxmapDAT)}; fixture_raw (dmxfixturePOP) + map_raw
+├── fixtures/     rep (replicatorCOMP по profiles, master ../templates/fx_tpl) → prof<k>/{sel, keep (deletePOP prof==k), attrs,
+│                 fixture (dmxfixturePOP), map (dmxmapDAT)}; fixture_raw (dmxfixturePOP, active при наличии geo_raw) + map_raw
 ├── output/       rep_out (replicatorCOMP по out_groups) → tpl_out/{out (dmxoutPOP), routing (tableDAT)}
 ├── diag/         preview (renderTOP над in_prepared + точки), pixels_top (poptoTOP), pixels_chop (poptoCHOP),
 │                 dmxmap_all (mergeDAT), counters (timerCHOP 1 Гц → расширение)
 ├── watch/        watch_folder (folderDAT), watch_exec (datexecuteDAT → Reload)
+├── templates/    fx_tpl, delay_tpl — мастера репликаторов; allowCooking=False на COMP (шаблон не кукает и не дублирует каналы)
 └── out1 (outTOP превью), out2 (outTOP пиксели), out3 (outCHOP пиксели), out4 (outDAT info), out5 (outDAT карта DMX)
 ```
 
@@ -517,11 +518,11 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
   не меняются внутри `hook`.
 - `delay/`: `tpl_delay/keep` (`deletePOP`, `invert=keep`, `entity=point`, `linestripbehavior=dellinestrip`
   по `dgrp == k`), `cache` (`cachePOP`, `cachesize=frames+1`, `outputindex=-frames`, `outputindexunit=frames`);
-  группа 0 — `keep` без кэша; `merge_delay`.
-- `fixtures/tpl_profile`: `keep` (`prof == i`, `dellinestrip`), `fixture` (`dmxfixturePOP`): блок 0 `name=RGB`,
-  `valuetype=point`, `valuesource=attribute`, `attr=Color(<перестановка по color_order>)`, `valueres=b8|b16`,
-  `normalized=True`; блоки `cell_extra`: `valuesource=constant`, `value=default/255`, `merge=True`; `W`/`A` без
-  значения — константа 0 в нужной позиции. `fixture_raw`: один блок `v`, 8 бит, normalized. `map` (`dmxmapDAT`).
+  группа 0 — тот же шаблон с `cachesize=1`, `outputindex=0` (проходной; единообразие реплик, цена — замер 6.2); `merge_delay`.
+- `fixtures/tpl_profile`: `keep` (`prof == i`, `dellinestrip`), `attrs` (`attributePOP`: `zero` float = 0, `ex` float≤4 —
+  умолчания `cell_extra` профиля), `fixture` (`dmxfixturePOP`): блок 0 `RGB`: `attr` — список по буквам `color_order`
+  (`Color(0|1|2)`, для `W`/`A` без значения — `zero`), `valueres=b8|b16`, `normalized`; блок 1 `EX` (`attr=ex`, `merge`)
+  при наличии `cell_extra` (до 4 каналов, 8 бит). Настройку реплики делает колбэк репликатора по строке `profiles`. `fixture_raw`: один блок `v`, 8 бит, normalized. `map` (`dmxmapDAT`).
 - `output/tpl_out`: `out` (`dmxoutPOP`): `interface` по протоколу, `multicast`, `netaddress=127.0.0.1`,
   `routingtable=./routing`, `rate` = `min(rate_hz, me.time.rate)`, `sendartsync`, `priority` по умолчанию,
   `localaddress` ← пара, `active` = `parent.dsm.par.Active and status ok`, `viewer=False`;
