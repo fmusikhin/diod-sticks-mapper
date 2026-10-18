@@ -83,7 +83,7 @@
   - _Requirements: 6.2, 6.3, 6.4, 7.3, 7.5_
 
 - [ ] 3. Расширение: загрузка патча и события
-- [ ] 3.1 Загрузка, статус, колбэки, таблица info
+- [x] 3.1 Загрузка, статус, колбэки, таблица info
   - `Reload`/`LoadPatch`: путь относительно `project.folder`; ядро — `load`, `auto_assign_all`, `validate`,
     `segments_by_fixture`, `routing_table`; `build_tables`; запись каждой таблицы одной операцией `text`
     (`geo_cells`, `geo_prims`, `geo_raw`, `raw_prims`, `fx_arrows`, `profiles`, `delay_groups`, `out_groups`, `routing_<grp>`, `info`)
@@ -98,7 +98,7 @@
     прежние таблицы и зовёт `onOutputError`; `info` совпадает с `summary(p)` ядра; `par.Status` меняется
   - _Requirements: 2.1, 2.2, 2.3, 2.6, 2.8, 9.1, 9.4, 9.5_
 
-- [ ] 3.2 Реакция на пары и автоперезагрузка файла
+- [x] 3.2 Реакция на пары и автоперезагрузка файла
   - `parexecuteDAT`: `Reload` (пульс), смена `Patchfile` → `Reload`; `Autoreload` → активность `watch_folder`
   - `watch/`: `folderDAT` на папку патча с фильтром по имени файла, обновление по времени;
     `datexecuteDAT onTableChange` → `Reload` при смене даты файла; параметры `folderDAT` сверить
@@ -230,3 +230,7 @@
 - 1.3: компонент `/project1/dsm` в `td/dsm_dev.toe` (сохранён как dsm_dev.7.toe, канонический обновлён); `.toe` — на контрольной точке 7.
 - 2.1: ось y холста направлена вверх (как V в TD), поворот — против часовой; rect для ленты/стика — вдоль ширины по центральной оси.
 - 2.2/2.3: broadcast без IP → 255.255.255.255 (явный выбор, как multicast), unicast без IP → 127.0.0.1 + `target_missing`; группа вывода без юниверсов даёт routing только с заголовком — 3.1 пишет его как есть.
+- 3.1/3.2: модуль геометрии расширение берёт из DAT `geometry_mod.module` (TD перезагружает при смене текста),
+  в `sys.path` — только `src/core`; `folderDAT.names` сравнивает имя БЕЗ расширения; колбэки parexec/datexec
+  выполняются в куке, не внутри вызвавшего скрипта — проверять через кадр; провода только внутри одной сети
+  (источник для `dsm` — `selectTOP` рядом с ним).
