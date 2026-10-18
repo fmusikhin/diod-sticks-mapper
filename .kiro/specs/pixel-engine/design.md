@@ -18,7 +18,7 @@
 ### Goals
 - Один примитив на сегмент ядра, адрес uint32 на примитиве; Python только при загрузке патча (3.x, 8.3).
 - Перехват на 127.0.0.x совпадает с `segment_table` / `cell_table` ядра байт в байт для всех `examples/` (6.10, 10.1).
-- ≤ 1 мс на кадр при 20 000 ячеек, 60 fps; ≤ 3,5 мс при 50 000 (8.1, 8.2).
+- ≤ 3 мс на кадр при 20 000 ячеек, 60 fps (исходно ≤ 1 мс, пересмотрено 18.10.2026); ≤ 3,5 мс при 50 000 (8.1, 8.2).
 - Контракт компонента по `CONTRIBUTING.md` §4: пары, коннекторы, колбэки, `Id`/`Version`, без абсолютных путей (1.x).
 - Число узлов вывода не зависит от числа контроллеров и фикстур (6.1, 6.5).
 
@@ -341,12 +341,12 @@ flowchart LR
 | 7.5 | `delay_ms` → кадры через `cachePOP` | `delay/` | `delay_groups.frames` | кадр |
 | 7.6 | кадр не обновился — повтор | атрибуты не меняются, `dmxoutPOP` шлёт прежнее | — | кадр |
 | 7.7 | `realTime=False` — пакеты на каждый кук | `dmxoutPOP` кукается на кук | `perf_probe`-подход | проверка |
-| 8.1 | ≤ 1 мс при 20 000 | strip на сегмент; один `glslPOP`; `Pixelschop` выключен | `engine_check` замер | проверка |
+| 8.1 | ≤ 3 мс при 20 000 (исходно ≤ 1 мс) | strip на сегмент; один `glslPOP`; `Pixelschop` выключен | `engine_check` замер | проверка |
 | 8.2 | ≤ 3,5 мс при 50 000 | то же | замер | проверка |
 | 8.3 | ни Python-кука, ни readback, ни пересборки в кадре | архитектура таблиц; `counters` вне кадра; `pixels_chop` по паре | профилировщик | кадр |
 | 8.4 | замер скриптом, результат в докках | `engine_check --perf`, `docs/architecture.md` §13 | — | проверка |
 | 9.1 | info: счётчики, статус, вход | `tables/info` (расширение + `counters`) | `out4` | — |
-| 9.2 | превью ≤ 0,5 мс, точки и стрелки | `diag/preview` (renderTOP: `in_prepared` фон + точки `px_final`, стрелка — первая/последняя ячейка) | `out1` | кадр |
+| 9.2 | превью ≤ 1 мс (исходно 0,5), точки и стрелки | `diag/preview` (renderTOP: `in_prepared` фон + точки `px_final`, стрелка — первая/последняя ячейка) | `out1` | кадр |
 | 9.3 | DAT карты DMX и маршрутизации | `dmxmap_all`, `routing_*` | `out5` | — |
 | 9.3a | пиксели как TOP и CHOP | `pixels_top` (poptoTOP, `onerow`/`square`), `pixels_chop` (poptoCHOP, пара `Pixelschop`) | `out2`, `out3` | кадр |
 | 9.4 | `onOutputError` по-русски, виден до следующей загрузки | `DsmEngineExt.report_error` | колбэк, info | загрузка |
@@ -546,7 +546,7 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
   `in_prepared` (`nullTOP`). Умолчания нейтральны.
 - `diag/preview`: `renderTOP` ортографической камеры над холстом: фон `in_prepared`, точки `px_final` цветом вывода,
   стрелка направления — отрезок от первой к последней ячейке фикстуры (линия POP из таблицы `fx_arrows`,
-  пишется расширением). Бюджет 0,5 мс проверяется замером; при превышении превью упрощается до точек.
+  пишется расширением). Бюджет 1 мс (исходно 0,5; пересмотрен 18.10.2026 по факту 0,64–0,92 мс на форсированных куках) проверяется замером; при превышении превью упрощается до точек.
 - `diag/pixels_top` (`poptoTOP`, `layout` ставит расширение: `onerow` при ≤ 16 384 ячеек, иначе `square`), `pixels_chop` (`poptoCHOP`,
   `active` ← `Pixelschop`) → `pixels_named` (`renameCHOP`: `r g b a`), `dmxmap_all` (`mergeDAT` карт реплик фикстур через `selectDAT`
   `map_<set>` по таблице `map_sets`; карта на `dmxoutPOP` пуста при выключенном `active`), `counters` (`timerCHOP` 1 Гц → `UpdateCounters`).
@@ -619,7 +619,7 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
   - 16 бит на `matrix_16x16_sacn.json` с `bits=16` вариантом (5.3); `GRB` на `strip_ws2812b.json` (5.2).
   - `Active=False` → пакетов нет; `Master=0.5` → байты вдвое меньше без пересборки (`geo_cells` не менялась) (5.7, 6.6).
   - Ошибка схемы → предыдущая карта DMX на месте, `onOutputError` вызван (2.3); `Autoreload` — правка файла → новая карта (2.7).
-- **Performance (`engine_check perf`)**: 20 000 ячеек ≤ 1 мс, 50 000 ≤ 3,5 мс (CPU+GPU узлов компонента);
+- **Performance (`engine_check perf`)**: 20 000 ячеек ≤ 3 мс (исходно ≤ 1 мс), 50 000 ≤ 3,5 мс (CPU+GPU узлов компонента);
   профилировщик — ноль Python-куков за 120 кадров; `poptoCHOP` выключен/включён — разница в отчёте (8.1–8.4).
 - **Smoke (`engine_check smoke`)**: новый проект, пустой COMP, `Id`/`Version`/`float(Version)`, нет `errors()`,
   `strip_ws2812b.json` шлёт ожидаемое на 127.0.0.1 (10.4).
@@ -651,8 +651,9 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
 | broadcast без IP не оговорён | `_target_ip`: unicast без IP → 127.0.0.1 + `target_missing`, broadcast → 255.255.255.255 | безопасное умолчание принципа 6 README |
 | `grid_for_data` — только для сеток | для линейных форм дублирует `cell_order` ядра | защищено тестом эквивалентности `test_grid_for_data_matches_core_cell_order`; ячейка на границе юниверса при `whole_pixel=false` кладётся в первый partial-сегмент |
 
-Открыто у заказчика после `/kiro-validate-impl`: порог 8.1 (≤ 1 мс на 20 тыс.: факт 2,6–2,8 мс, пол `dmxfixturePOP`),
-бюджет превью 9.2 (≤ 0,5 мс: на форсированных куках 0,64–0,92 мс, steady-state не замерен отдельно), текст 5.3.
+Решения заказчика 18.10.2026 после `/kiro-validate-impl`: порог 8.1 пересмотрен до ≤ 3 мс на 20 тыс. (факт 2,6–2,8 мс, пол
+`dmxfixturePOP`), бюджет превью 9.2 — до ≤ 1 мс (факт 0,64–0,92 мс на форсированных куках), 5.3 — квантование по факту TD
+(`floor(float32(v)·255)`, старший байт первым). Требования обновлены.
 Без автоматического факта (только заметки исполнителя): 7.4 ArtSync (широковещательный, перехват только 127.x),
 7.5 задержка (`delay_test.json` вне режима `examples`), 6.9 `Localaddress`, 4.7 форматы входа (стенд даёт 8-бит `constantTOP`).
 
