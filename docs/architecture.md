@@ -57,27 +57,33 @@ patch.json
 
 ## 4. Конвейер кадра
 
-```
-вход TOP
-  → подготовка (кроп, ограничение разрешения, уровни)
-  → режим источника: КОНТЕНТ | ПАЛИТРА (сегменты или генератор 1–12) → кроссфейд
-  → текстура
+Реализовано спекой `pixel-engine` (0.1), контракт — `engine.md`. Граница Python/GPU — таблицы DAT:
 
-патч → (Python, только при правке) → POP-геометрия:
-        1 примитив = 1 фикстура, 1 точка = 1 ячейка в порядке данных
-        атрибуты точки: UV на картинке (по длине дуги), позиция, индекс ячейки
-        атрибуты примитива: DMXFixtureUniverse / DMXFixtureChannel / DMXFixtureNetAddress
-  → выборка цвета (Lookup Texture POP или GLSL с несколькими отсчётами)
-  → пиксельная обработка (GLSL POP): Locate/тест, генераторы «по фикстурам», яркость,
-    баланс белого, гамма, RGB→RGBW, лимит мощности (сумма через Analyze POP), раскладка каналов
-  → DMX Fixture POP — по одному на профиль (страница профиля генерируется из типа)
-  → один DMX Out POP на протокол; таблица маршрутизации (IP и priority на юниверс);
-    Multipliers = мастер
+```
+патч JSON ──(Python, только при загрузке/правке)──► ядро dsm_core: load → auto_assign_all → validate
+                                                     → segments_by_fixture → routing_table
+                                                   ► dsm_geometry.build_tables → DAT tables/*
+                                                     (geo_cells, geo_prims, geo_raw, profiles, delay_groups,
+                                                      out_groups, fixture_sets, raw_sets, routing_<grp>, info)
+                                                   ► репликаторы пересобирают delay / fixtures / output
+
+вход TOP in1 → input: crop → resize (Maxres) → levels (Black/White/Ingamma) → in_prepared
+  → engine: dattoPOP (1 line strip = 1 сегмент ядра, 1 точка = 1 ячейка в порядке данных;
+            точки: P, Tex, cell, fx, prof, dgrp, ogrp, active, bright, col, mute;
+            примитивы: DMXFixtureUniverse / DMXFixtureChannel / DMXFixtureNetAddress)
+  → glslPOP px_process: Color = texture(in_prepared, Tex) · col · Master · bright · (1−mute) · active
+  → hook (точка подключения locate-test / palette-generators: подменяют только Color)
+  → delay: cachePOP на группу задержки (delay_ms выхода → кадры при fps проекта)
+  → fixtures: dmxfixturePOP на (профиль × группа вывода) — порядок цвета свизлом, 8/16 бит,
+              cell_extra, сырые head/tail отдельной цепочкой
+  → output: dmxoutPOP на группу вывода (протокол, multicast, rate_hz, ArtSync, таблица маршрутизации
+            с IP и priority на юниверс)
 ```
 
-Сколько бы ни было контроллеров и фикстур — один DMX Fixture POP на профиль и один DMX Out POP
-на протокол. По документации TD 2025: адрес задаётся атрибутами примитива, для каждого IP
-каналы считаются независимо, DMX Out POP сливает любое число DMX Fixture POP.
+Сколько бы ни было контроллеров и фикстур — узлы реплицируются по данным патча (профили, группы задержки,
+группы вывода), а не по железу. Диагностика (`diag`) — превью, пиксели TOP/CHOP, карта DMX по запросу,
+счётчики 1 Гц; автоперезагрузка файла (`watch`). Гамма, баланс белого, RGB→RGBW, лимит мощности — `color-power`;
+выборка областью — этап 2.
 
 ## 5. Адресация и импорт
 
@@ -102,10 +108,11 @@ patch.json
 
 ## 6. Синхронизация с видео
 
-- Маппер берёт тот же TOP, что уходит на экраны, в том же кадре — без NDI и второй программы.
-- Частота вывода = fps проекта или делитель; ArtSync; выше 44 Гц для пиксельных контроллеров.
-- Задержка на каждый выход в мс, чтобы LED совпадал с экраном или проектором.
-- Если кадр выпал — повторяется последний.
+- Маппер берёт тот же TOP, что уходит на экраны, в том же кадре — без NDI и второй программы (`in1`).
+- Частота вывода — `rate_hz` выхода из патча (по умолчанию = fps проекта), ArtSync — флаг выхода; делитель
+  частоты не нужен (решение заказчика, `pixel-engine`). Выше 44 Гц для пиксельных контроллеров.
+- Задержка на каждый выход — `delay_ms` в патче → `cachePOP` в кадрах при fps проекта (группа задержки).
+- Если кадр выпал — `dmxoutPOP` повторяет последний; вывод идёт сам, без Python в кадре.
 
 ## 7. Интерфейс
 

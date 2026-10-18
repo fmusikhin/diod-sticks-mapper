@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -165,6 +166,8 @@ def start(mode: str = "examples") -> None:
         run_perf()
     elif mode == "smoke":
         run_smoke()
+    elif mode == "docs":
+        run_docs()
     else:
         raise ValueError(f"неизвестный режим {mode!r}")
 
@@ -681,3 +684,64 @@ def _smoke_finish() -> None:
     json.dump(report, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     _log(f"smoke ИТОГ: {'пройдено' if allok else 'есть ошибки'}; отчёт {path}; копия компонента оставлена в {STAND}/smoke для осмотра")
     _s["done"] = True
+
+
+# ---------------------------------------------------------------- режим docs (7): docs/engine.md против живого компонента
+
+REPLICA_RE = re.compile(r"^(grp\d+|p\d+g\d+|raw_g\d+|out_g\d+|map_\w+|routing_g\d+|\w+_callbacks|\w+_routingtable|\w+_dmxmap)$")
+
+
+def _doc_section(text: str, title: str) -> str:
+    m = re.search(r"^## " + re.escape(title) + r"\s*$(.*?)(?=^## |\Z)", text, re.M | re.S)
+    return m.group(1) if m else ""
+
+
+def run_docs() -> None:
+    dsm = op(DSM)  # noqa: F821
+    text = open(os.path.join(_repo_root(), "docs", "engine.md"), encoding="utf-8").read()
+    diffs = []
+    # пары: таблицы раздела «Пары», первая колонка в обратных кавычках
+    doc_pars = set(re.findall(r"^\| `([A-Z][a-z]+)` \|", _doc_section(text, "Пары"), re.M))
+    live_pars = {p.name for p in dsm.customPars}
+    diffs += [f"пара в доке, нет в компоненте: {n}" for n in sorted(doc_pars - live_pars)]
+    diffs += [f"пара в компоненте, нет в доке: {n}" for n in sorted(live_pars - doc_pars)]
+    # коннекторы
+    doc_conn = re.findall(r"^\| `(in|out)(\d)` \|", _doc_section(text, "Коннекторы"), re.M)
+    n_in = sum(1 for k, _ in doc_conn if k == "in"); n_out = sum(1 for k, _ in doc_conn if k == "out")
+    if n_in != len(dsm.inputConnectors) or n_out != len(dsm.outputConnectors):
+        diffs.append(f"коннекторы: док in {n_in}/out {n_out}, компонент in {len(dsm.inputConnectors)}/out {len(dsm.outputConnectors)}")
+    # структура: токены в обратных кавычках — имена операторов (строчные, без типов и путей файлов)
+    sect = _doc_section(text, "Структура компонента")
+    tokens = set(re.findall(r"`([a-z][a-z0-9_]*(?:/[a-z][a-z0-9_]*)*)`", sect)) - {"dsm", "parentshortcut"}
+    all_names = {o.name for o in dsm.findChildren()}
+    for tok in sorted(tokens):
+        if "/" in tok:
+            if dsm.op(tok) is None:
+                diffs.append(f"оператор в доке, нет в компоненте: {tok}")
+        elif tok not in all_names:
+            diffs.append(f"оператор в доке, нет в компоненте: {tok}")
+    # обратно: операторы корня и подконтейнеров (кроме реплик и авто-DAT) должны быть в доке
+    for o in dsm.children:
+        if o.name not in tokens and not REPLICA_RE.match(o.name):
+            diffs.append(f"оператор в компоненте, нет в доке: {o.name}")
+        if o.isCOMP and o.name != "templates":
+            for k in o.children:
+                if k.name not in tokens and not REPLICA_RE.match(k.name):
+                    diffs.append(f"оператор в компоненте, нет в доке: {o.name}/{k.name}")
+    for k in dsm.op("templates").children:
+        if k.name not in tokens and k.name != "agents_md":
+            diffs.append(f"шаблон в компоненте, нет в доке: templates/{k.name}")
+    # Info: Id/Version из дока
+    for name in ("Id", "Version"):
+        m = re.search(r"^\| `" + name + r"` \| `([^`]+)`", text, re.M)
+        if m and dsm.par[name].eval() != m.group(1):
+            diffs.append(f"{name}: док {m.group(1)!r}, компонент {dsm.par[name].eval()!r}")
+    report = dict(mode="docs", pars=sorted(live_pars), tokens=len(tokens), diffs=diffs, ok=not diffs)
+    path = os.path.join(_reports_dir(), f"docs_{time.strftime('%Y%m%d_%H%M%S')}.json")
+    json.dump(report, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    if diffs:
+        for d in diffs:
+            _log(f"docs: {d}")
+        _log(f"docs ИТОГ: расхождений {len(diffs)}; отчёт {path}")
+    else:
+        _log(f"docs ИТОГ: расхождений нет ({len(live_pars)} пар, {len(tokens)} имён операторов); отчёт {path}")

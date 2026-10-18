@@ -15,25 +15,26 @@
 
 ### Слой TouchDesigner
 **Где**: `src/td/`
-**Что**: расширения компонента, обработчики интерфейса, строитель POP-геометрии; файлы синхронизируются с DAT
-**Пример**: `src/td/dsm_ext.py`
+**Что**: расширения компонента, строитель таблиц для POP-геометрии (чистый модуль, pytest), шаблоны колбэков;
+файлы синхронизируются с DAT компонента (`par.file` относительно папки проекта)
+**Пример**: `src/td/dsm_engine_ext.py` (единственный модуль с TD-API), `src/td/dsm_geometry.py`, `src/td/dsm_callbacks_default.py`
 
 ### Шейдеры
 **Где**: `src/glsl/`
 **Что**: GLSL для POP и TOP, один файл = один шейдер
-**Пример**: `src/glsl/sample_pop.glsl`
+**Пример**: `src/glsl/px_process.glsl` (glslPOP: `TDIn_<Attr>(вход, id)` → `<Attr>[id]`)
 
 ### Тесты
 **Где**: `tests/`
-**Что**: pytest для ядра; синтетические образцы (без данных заказчиков)
-**Пример**: `tests/test_addressing.py`, `tests/data/resolume_fixture_sample.xml`
+**Что**: pytest для ядра и слоя TD без TouchDesigner; синтетические образцы (без данных заказчиков)
+**Пример**: `tests/test_addressing.py`, `tests/test_td_geometry.py`, `tests/test_td_engine_ext.py`
 
 ### Dev-проект и релиз
-**Где**: `td/dsm_dev.toe` (канонический, без номера автосейва), `release/` (локально, в git не идёт)
-**Что**: сборка компонента; `dsm.tox` публикуется в GitHub Releases
+**Где**: `td/dsm_dev.toe` (канонический, без номера автосейва), `td/stand/` (синтетические патчи стенда; `reports/` и `smoke.toe` не в git), `release/` (локально, в git не идёт)
+**Что**: сборка компонента `/project1/dsm`, стенд `/project1/stand` (DAT `run_check` ↔ `tools/engine_check.py`); `dsm.tox` публикуется в GitHub Releases
 
 ### Примеры, утилиты, документация
-**Где**: `examples/` (патчи), `tools/` (перехват DMX, клиент TD), `docs/`
+**Где**: `examples/` (патчи), `tools/` (перехват DMX `dmx_listen.py`, стенд `engine_check.py`), `docs/` (`engine.md` — контракт компонента)
 **Спеки и steering**: `.kiro/`
 
 ## Именование
