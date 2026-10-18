@@ -8,7 +8,7 @@ TDImportCache/
 *.toc
 
 # Собранные релизы — в GitHub Releases, не в историю
-release/*.tox
+release/
 
 # Python
 __pycache__/

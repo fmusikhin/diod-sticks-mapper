@@ -164,9 +164,7 @@ def start(mode: str = "examples") -> None:
     elif mode == "perf":
         run_perf()
     elif mode == "smoke":
-        from_smoke = globals().get("run_smoke")
-        if from_smoke:
-            from_smoke()
+        run_smoke()
     else:
         raise ValueError(f"неизвестный режим {mode!r}")
 
@@ -474,4 +472,212 @@ def _perf_finish() -> None:
     path = os.path.join(_reports_dir(), f"perf_{time.strftime('%Y%m%d_%H%M%S')}.json")
     json.dump(report, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     _log(f"perf ИТОГ: отчёт {path}")
+    _s["done"] = True
+
+
+# ---------------------------------------------------------------- режим smoke (6.3, CONTRIBUTING §5)
+
+SMOKE_PATCH = "../examples/strip_ws2812b.json"       # копия в stand/smoke: Art-Net 127.0.0.1, юниверсы 0–1
+MAIN_PATCH = "stand/matrix_sacn_unicast.json"         # основной dsm одновременно: sACN 127.0.0.3, юниверсы 1–2
+
+
+def run_smoke() -> None:
+    dsm = op(DSM)  # noqa: F821
+    _s.clear()
+    _s.update(mode="smoke", t0=time.time(), results={}, log=[])
+    _s["saved"] = dict(patch=dsm.par.Patchfile.eval(), active=dsm.par.Active.eval(), master=dsm.par.Master.eval(),
+                       src=op("/project1/dsm_test_in").par.top.val or "stand/test_src")  # noqa: F821
+    # 1. пустая заготовка → release/dsm.tox
+    dsm.par.Patchfile = ""; dsm.par.Active = False; dsm.ext.DsmEngineExt.Reload()
+    _later("_smoke_export", 20)
+
+
+def _smoke_export() -> None:
+    dsm = op(DSM)  # noqa: F821
+    rel = os.path.join(_repo_root(), "release"); os.makedirs(rel, exist_ok=True)
+    path = os.path.join(rel, "dsm.tox")
+    replicas = [c.name for c in dsm.findChildren() if c.isCOMP and c.parent().name in ("fixtures", "delay", "output") and c.name[:1] in "pgro" and c.name not in ("rep", "rep_raw")]
+    state = dict(status=dsm.par.Status.eval(), cells_rows=dsm.op("tables/geo_cells").numRows - 1, replicas=replicas,
+                 patchfile=dsm.par.Patchfile.eval(), has_agents_md=dsm.op("agents_md") is not None)
+    dsm.save(path)
+    state["ok"] = state["status"] == "no patch" and state["cells_rows"] == 0 and state["patchfile"] == "" and state["has_agents_md"]
+    _s["results"]["export"] = dict(path=path, size=os.path.getsize(path), **state)
+    _log(f"smoke: экспорт {path} ({os.path.getsize(path)} байт), статус {state['status']}, строк ячеек {state['cells_rows']}, реплик {len(replicas)}")
+    # 2. загрузка в пустой COMP стенда
+    st = op(STAND)  # noqa: F821
+    old = st.op("smoke")
+    if old:
+        old.destroy()
+    sm = st.create(baseCOMP, "smoke"); sm.nodeX, sm.nodeY = 600, -800; sm.viewer = True  # noqa: F821
+    loaded = sm.loadTox(path)
+    src = sm.create(selectTOP, "src"); src.par.top = "../test_grey"; src.nodeX, src.nodeY = -300, 0; src.viewer = True  # noqa: F821
+    loaded.inputConnectors[0].connect(src)
+    _s["smoke_comp"] = loaded.path
+    _later("_smoke_check_loaded", 10)
+
+
+def _smoke_check_loaded() -> None:
+    c = op(_s["smoke_comp"])  # noqa: F821
+    res = dict(name=c.name, id=c.par.Id.eval(), version=c.par.Version.eval(), version_float=float(c.par.Version.eval()),
+               errors=[(o.path, o.errors()[:80]) for o in [c] + c.findChildren() if o.errors() and o.allowCooking and "templates" not in o.path],
+               script_errors=[(o.path, o.scriptErrors()[:80]) for o in c.findChildren() if o.isDAT and o.scriptErrors()],
+               status=c.par.Status.eval(), ext_ok=bool(c.ext.DsmEngineExt.api))
+    res["ok"] = res["name"] == "dsm" and res["id"] == "dsm/mapper" and not res["errors"] and not res["script_errors"] and res["status"] == "no patch"
+    _s["results"]["loaded"] = res
+    _log(f"smoke: загружен {c.path}: Id {res['id']}, Version {res['version']}, ошибок {len(res['errors'])}, scriptErrors {len(res['script_errors'])} → {'ok' if res['ok'] else 'ОШИБКА'}")
+    # 3. две копии одновременно: копия — strip на 127.0.0.1 (Art-Net), основной — матрица sACN unicast на 127.0.0.3
+    c.par.Patchfile = SMOKE_PATCH; c.par.Master = 1.0
+    dsm = op(DSM)  # noqa: F821
+    op("/project1/dsm_test_in").par.top = "stand/test_grey"  # noqa: F821
+    dsm.par.Patchfile = MAIN_PATCH; dsm.par.Master = 1.0
+    _later("_smoke_two_copies", SETTLE_FRAMES + 30)
+
+
+def _smoke_two_copies() -> None:
+    dsm, c = op(DSM), op(_s["smoke_comp"])  # noqa: F821
+    api = dsm.ext.DsmEngineExt.api
+    exp = {}
+    for comp in (dsm, c):
+        for (ip, uni), data in expected_bytes(api, comp.ext.DsmEngineExt.patch, GREY).items():
+            exp[f"{ip}|{uni}"] = data
+    _s["expected"] = exp
+    tool = os.path.join(_repo_root(), "tools", "dmx_listen.py")
+    procs = {}
+    for proto, ip in (("artnet", "127.0.0.1"), ("sacn", "127.0.0.3")):
+        out = os.path.join(_reports_dir(), f"cap_smoke_{proto}.json")
+        if os.path.exists(out):
+            os.remove(out)
+        procs[proto] = (subprocess.Popen([sys.executable, "-I", tool, proto, str(CAPTURE_SECONDS), out, "--bind", ip], cwd=_repo_root()), out)
+    _s["procs"] = procs
+    dsm.par.Active = True; c.par.Active = True
+    _later("_smoke_two_copies_done", CAPTURE_FRAMES)
+
+
+def _compare_caps(exp: dict, caps: dict) -> tuple:
+    seen, mism = 0, []
+    for key, data in exp.items():
+        ip, uni = key.split("|")
+        for proto, cap in caps.items():
+            got = cap.get("dst", {}).get(ip, {}).get("universes", {}).get(uni)
+            if got is None:
+                continue
+            seen += 1
+            gd = got["data"] + [0] * (512 - len(got["data"]))
+            mism += [(ip, int(uni), ch + 1, data[ch], gd[ch]) for ch in range(512) if gd[ch] != data[ch]]
+    return seen, mism
+
+
+def _wait_procs(procs: dict) -> dict:
+    caps = {}
+    for proto, (p, out) in procs.items():
+        try:
+            p.wait(timeout=5)
+        except Exception:
+            p.kill()
+        caps[proto] = json.load(open(out, encoding="utf-8")) if os.path.exists(out) else {"dst": {}}
+    return caps
+
+
+def _smoke_two_copies_done() -> None:
+    dsm, c = op(DSM), op(_s["smoke_comp"])  # noqa: F821
+    dsm.par.Active = False; c.par.Active = False
+    seen, mism = _compare_caps(_s["expected"], _wait_procs(_s["procs"]))
+    res = dict(expected=len(_s["expected"]), seen=seen, mismatches=len(mism), first=mism[:6],
+               main_status=dsm.par.Status.eval(), copy_status=c.par.Status.eval(), ok=(seen == len(_s["expected"]) and not mism))
+    _s["results"]["two_copies"] = res
+    _log(f"smoke: две копии — юниверсов {seen}/{res['expected']}, байт не совпало {len(mism)} → {'ok' if res['ok'] else 'ОШИБКА'}")
+    # 4. Master 0,5 у копии → байты по ожиданию с master=0,5; таблица geo_cells не меняется
+    _s["cells_hash"] = hash(c.op("tables/geo_cells").text)
+    c.par.Master = 0.5
+    _s["expected"] = {f"{ip}|{uni}": data for (ip, uni), data in expected_bytes(dsm.ext.DsmEngineExt.api, c.ext.DsmEngineExt.patch, GREY, master=0.5).items()}
+    out = os.path.join(_reports_dir(), "cap_smoke_master.json")
+    if os.path.exists(out):
+        os.remove(out)
+    _s["procs"] = {"artnet": (subprocess.Popen([sys.executable, "-I", os.path.join(_repo_root(), "tools", "dmx_listen.py"), "artnet",
+                                                 str(CAPTURE_SECONDS), out, "--bind", "127.0.0.1"], cwd=_repo_root()), out)}
+    c.par.Active = True
+    _later("_smoke_master_done", CAPTURE_FRAMES)
+
+
+def _smoke_master_done() -> None:
+    dsm, c = op(DSM), op(_s["smoke_comp"])  # noqa: F821
+    c.par.Active = False
+    seen, mism = _compare_caps(_s["expected"], _wait_procs(_s["procs"]))
+    res = dict(expected=len(_s["expected"]), seen=seen, mismatches=len(mism), first=mism[:6],
+               cells_unchanged=(hash(c.op("tables/geo_cells").text) == _s["cells_hash"]), ok=(seen == len(_s["expected"]) and not mism))
+    _s["results"]["master_half"] = res
+    _log(f"smoke: Master 0,5 — юниверсов {seen}/{res['expected']}, байт не совпало {len(mism)}, geo_cells без изменений {res['cells_unchanged']} → {'ok' if res['ok'] and res['cells_unchanged'] else 'ОШИБКА'}")
+    c.par.Master = 1.0
+    # 5. ошибка схемы после рабочей загрузки — карта и таблицы прежние
+    rows_before = c.op("diag/dmxmap_all").text; cells_before = c.op("tables/geo_cells").text
+    bad = os.path.join(_reports_dir(), "bad_schema.json")  # валидный JSON, невалидная схема
+    doc = json.load(open(os.path.join(_repo_root(), "examples", "strip_ws2812b.json"), encoding="utf-8"))
+    doc["fixtures"] = "not a list"
+    json.dump(doc, open(bad, "w", encoding="utf-8"))
+    ok = c.ext.DsmEngineExt.LoadPatch("stand/reports/bad_schema.json")
+    res2 = dict(load_returned=ok, status=c.par.Status.eval(), message=c.ext.DsmEngineExt.message[:80],
+                map_rows_same=(c.op("diag/dmxmap_all").text == rows_before), cells_same=(c.op("tables/geo_cells").text == cells_before))
+    res2["ok"] = (not ok) and res2["status"] == "error" and res2["map_rows_same"] and res2["cells_same"]
+    _s["results"]["schema_error"] = res2
+    _log(f"smoke: ошибка схемы — статус {res2['status']}, карта прежняя {res2['map_rows_same']}, таблицы прежние {res2['cells_same']} → {'ok' if res2['ok'] else 'ОШИБКА'}")
+    # 6. автоперезагрузка: копия файла в reports, правка на диске
+    import shutil
+    auto = os.path.join(_reports_dir(), "auto_test.json")
+    shutil.copy(os.path.join(_repo_root(), "examples", "strip_ws2812b.json"), auto)
+    c.par.Patchfile = "stand/reports/auto_test.json"
+    _s["auto_path"] = auto
+    _later("_smoke_auto_touch", SETTLE_FRAMES)
+
+
+def _smoke_auto_touch() -> None:
+    c = op(_s["smoke_comp"])  # noqa: F821
+    _s["auto_mtime0"] = c.ext.DsmEngineExt.loaded_mtime
+    text = open(_s["auto_path"], encoding="utf-8").read().replace('"name": "', '"name": "A ')
+    open(_s["auto_path"], "w", encoding="utf-8").write(text)
+    ts = time.time() + 5
+    os.utime(_s["auto_path"], (ts, ts))
+    _later("_smoke_auto_check", 120)
+
+
+def _smoke_auto_check() -> None:
+    c = op(_s["smoke_comp"])  # noqa: F821
+    res = dict(mtime_before=_s["auto_mtime0"], mtime_after=c.ext.DsmEngineExt.loaded_mtime,
+               reloaded=(c.ext.DsmEngineExt.loaded_mtime != _s["auto_mtime0"]), status=c.par.Status.eval(),
+               name_updated=any(fx.name.startswith("A ") for fx in c.ext.DsmEngineExt.patch.fixtures))
+    res["ok"] = res["reloaded"] and res["status"] == "ok" and res["name_updated"]
+    _s["results"]["autoreload"] = res
+    _log(f"smoke: автоперезагрузка — перезагружено {res['reloaded']}, имя обновилось {res['name_updated']} → {'ok' if res['ok'] else 'ОШИБКА'}")
+    # 7. Active выключен у обеих копий — пакетов нет (6.6)
+    dsm = op(DSM)  # noqa: F821
+    assert not dsm.par.Active.eval() and not c.par.Active.eval()
+    tool = os.path.join(_repo_root(), "tools", "dmx_listen.py")
+    procs = {}
+    for proto, ip in (("artnet", "127.0.0.1"), ("sacn", "127.0.0.3")):
+        out = os.path.join(_reports_dir(), f"cap_smoke_silence_{proto}.json")
+        if os.path.exists(out):
+            os.remove(out)
+        procs[proto] = (subprocess.Popen([sys.executable, "-I", tool, proto, str(CAPTURE_SECONDS), out, "--bind", ip], cwd=_repo_root()), out)
+    _s["procs"] = procs
+    _later("_smoke_silence_done", CAPTURE_FRAMES)
+
+
+def _smoke_silence_done() -> None:
+    caps = _wait_procs(_s["procs"])
+    unis = {proto: sum(len(d.get("universes", {})) for d in cap.get("dst", {}).values()) for proto, cap in caps.items()}
+    res = dict(universes_seen=unis, ok=(sum(unis.values()) == 0))
+    _s["results"]["active_off_silence"] = res
+    _log(f"smoke: Active выключен — юниверсов в эфире {unis} → {'ok' if res['ok'] else 'ОШИБКА'}")
+    _smoke_finish()
+
+
+def _smoke_finish() -> None:
+    dsm = op(DSM)  # noqa: F821
+    sv = _s["saved"]
+    op("/project1/dsm_test_in").par.top = sv["src"]  # noqa: F821
+    dsm.par.Active = sv["active"]; dsm.par.Master = sv["master"]; dsm.par.Patchfile = sv["patch"]; dsm.ext.DsmEngineExt.Reload()
+    allok = all(r.get("ok") for r in _s["results"].values())
+    report = dict(mode="smoke", seconds=round(time.time() - _s["t0"], 1), results=_s["results"], log=_s["log"], ok=allok)
+    path = os.path.join(_reports_dir(), f"smoke_{time.strftime('%Y%m%d_%H%M%S')}.json")
+    json.dump(report, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    _log(f"smoke ИТОГ: {'пройдено' if allok else 'есть ошибки'}; отчёт {path}; копия компонента оставлена в {STAND}/smoke для осмотра")
     _s["done"] = True

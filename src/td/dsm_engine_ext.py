@@ -21,13 +21,30 @@ INFO_KEYS = ("status", "patch_path", "fixtures", "cells", "universes", "outputs"
              "pixels_layout", "message", "fps", "input")
 
 
-def _repo_root() -> str:
-    """Корень репозитория относительно папки проекта (``td/dsm_dev.toe`` → родитель ``td``).
+def find_core_dir(start: str, max_up: int = 6) -> str:
+    """Папка ``src/core`` с пакетом ``dsm_core``: ищется от ``start`` вверх по дереву (до ``max_up`` уровней).
 
-    В чужом проекте ядро подключает хозяин (``src/core`` в ``sys.path``) — тогда поиск не нужен.
+    ``td/dsm_dev.toe`` → ``../src/core``; ``td/stand/smoke.toe`` → ``../../src/core``. Чистая функция — проверяется pytest.
+    Пустая строка — не найдено (в чужом проекте ядро подключает хозяин: ``src/core`` в ``sys.path``).
     """
-    folder = project.folder  # noqa: F821 — глобал TouchDesigner
-    return os.path.dirname(folder.rstrip("/\\"))
+    folder = os.path.abspath(start.rstrip("/\\"))
+    for _ in range(max_up + 1):
+        cand = os.path.join(folder, "src", "core")
+        if os.path.isdir(os.path.join(cand, "dsm_core")):
+            return cand
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            break
+        folder = parent
+    return ""
+
+
+def _repo_root() -> str:
+    """Корень репозитория: папка над ``src/core`` (поиск вверх от папки проекта); иначе родитель папки проекта."""
+    core = find_core_dir(project.folder)  # noqa: F821 — глобал TouchDesigner
+    if core:
+        return os.path.dirname(os.path.dirname(core))
+    return os.path.dirname(project.folder.rstrip("/\\"))  # noqa: F821
 
 
 def ensure_core_on_path() -> None:
@@ -41,8 +58,8 @@ def ensure_core_on_path() -> None:
         return
     except ImportError:
         pass
-    path = os.path.join(_repo_root(), "src", "core")
-    if os.path.isdir(path) and path not in sys.path:
+    path = find_core_dir(project.folder)  # noqa: F821
+    if path and path not in sys.path:
         sys.path.insert(0, path)
 
 
@@ -113,6 +130,8 @@ class DsmEngineExt:
         raw = self.ownerComp.par.Patchfile.eval()
         if not raw:
             self.patch, self.issues, self.tables, self.loaded_mtime = None, [], None, None
+            empty = self.api.new_patch()
+            self._write_tables(self.geometry.build_tables(empty, [], {}, self.api.routing_table(empty), 60.0))  # заготовка без состояния
             self._set_status("no patch", "")
             self._write_info()
             self.ApplyActive()
