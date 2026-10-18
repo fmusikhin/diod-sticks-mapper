@@ -18,7 +18,7 @@
   - В TD 2025 **нет `scriptPOP`**. Путь «Python → геометрия без Python в кадре»: Python пишет
     `tableDAT` → `dattoPOP` (колонки → атрибуты, тип задаётся явно: `attr0overrideauto` + `attr0type=uint`)
     → `linebreakPOP` по точечному флагу `LineBreak` (`everyn`, `bydistancethreshold`,
-    `useinputlinebreaks` выключать явно; `uselinestripindex` не группирует) → `attributeconvertPOP`
+    `useinputlinebreaks` выключать явно; `uselinestripindex` не группирует; **поправка спайка 1.1: флаг входа читает `useinputlinebreaks=True`**) → `attributeconvertPOP`
     `pointtoprim` для адресных атрибутов. DAT меняется только при загрузке патча, дальше цепочка статична.
   - `dmxfixturePOP.routingtable` (DAT: примитив → net/subnet/universe/channel/netaddress) переопределяет
     атрибуты — запасной путь, если uint не переживёт `attributeconvertPOP`.
@@ -167,8 +167,31 @@
   + квантование), JSON-отчёт в `td/stand/reports/` (в `.gitignore`). Замер стоимости — как `perf_probe`
   этапа 0 (`realTime=False`, `totalCooks`).
 
+## Спайк 1.1 — факты стенда (18.10.2026, TD 2025.33070, `/project1/stand/spike`)
+
+- **uint32 переживает `attributeconvertPOP pointtoprim`**: после конвертации `primAttributes` =
+  `DMXFixtureUniverse UINT32×1`, `DMXFixtureChannel UINT32×1`, `DMXFixtureNetAddress UINT32×4`; карта DMX
+  показывает юниверс 7 каналы 1–30 → 127.0.0.1 и юниверс 9 каналы 4–18 → 127.0.0.2 — ровно как в таблице.
+- **Есть более короткий путь — `dattoPOP` со второй таблицей примитивов** (`primitivesdat`, `primtype=linestrips`,
+  колонка `vertices` = индексы точек через пробел, блоки `primattr` с `overrideauto` + `type=uint`): line strip
+  с uint-атрибутами класса primitive сразу, без `linebreakPOP` и `attributeconvertPOP`. Карта DMX идентична пути A.
+  **Выбран для design**: `engine/pts_cells` получает две таблицы (`geo_cells` точки, `geo_prims` примитивы);
+  `strips_cells` и `addr_cells` не нужны. Расширение пишет `geo_prims`: строка на сегмент, `vertices` — индексы
+  строк `geo_cells` этого сегмента по порядку, адресные колонки из `Segment` и маршрутизации.
+- `linebreakPOP`: флаг входа читается параметром **`useinputlinebreaks=True`** (+ `linebreakname`);
+  `uselinebreak` относится к выходному атрибуту — с ним одним получается один strip (поправка к скиллу
+  `dmxfixture-pop-geometry`). Нужен, если путь B когда-нибудь откажет.
+- `dattoPOP`: автоконвертация колонок создаёт `P`, но **не `Color`** — цветовую колонку задавать блоком
+  (`Color(*)` → `Color`, тип `color`, 4 компонента); `LineBreak` должен быть `int` (uint даёт предупреждение
+  «LineBreak should be int1»). Имена колонок компонентов — `Name(0)`, `Name(1)`, …, маска `Name(*)`.
+- **Квантование** `dmxfixturePOP` при `normalized=True`, 8 бит: **байт = floor(v·255)** (усечение, не округление):
+  0→0, 0,001→0, 0,1→25, 0,2→51, 0,25→63, 0,3→76, 0,4→102, 0,498→126, 0,5→127, 0,502→128, 0,6→153,
+  0,75→191, 0,9→229, 0,999→254, 1,0→255. Это правило использует проверка 6.1 (`cell_table` × floor).
+- `autolayout` на `dmxfixturePOP` можно оставить включённым: атрибуты примитива имеют приоритет (карта взяла 7/1 и 9/4, а не автораскладку).
+- `dmxmapDAT` показывает значения с `updateval`/`updatevalpulse` и отстаёт на кук — читать кадром позже.
+
 ## Risks & Mitigations
-- uint теряется при `attributeconvertPOP` → спайк первой задачей; запасной путь — `routingtable` фикстуры.
+- ~~uint теряется при `attributeconvertPOP`~~ — спайк 1.1: не теряется; выбран путь через таблицу примитивов `dattoPOP` (ещё короче).
 - Порядок блоков `cell_extra` в `dmxfixturePOP` не совпадёт с ядром → проверка `dmxmapDAT` на `bar_common_channels.json`;
   запасной путь — `cell_extra` как компоненты одного атрибута `chan` (uvec/float4) с `merge`.
 - `dattoPOP` на 50 тыс. строк дольше 3 с (3.10) → замер; запасной путь — `fileinPOP`/бинарный формат

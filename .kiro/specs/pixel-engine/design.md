@@ -39,8 +39,9 @@
 - Загрузка патча через `dsm_core.api` и жизненный цикл: статус, ошибки, автоперезагрузка.
 - Расчёт геометрии ячеек на холсте: UV по длине дуги для `line`/`polyline`/`rect`, сетка матрицы,
   матрица на линии как лента, перевод `m → px`, признак активности (`disabled`, `every_n`).
-- Табличное представление геометрии (`geo_cells`, `geo_raw`) и статическая POP-цепочка:
-  `dattoPOP → linebreakPOP → attributeconvertPOP → glslPOP → hook → группы задержки → dmxfixturePOP на профиль → dmxoutPOP на группу вывода`.
+- Табличное представление геометрии (`geo_cells` + `geo_prims`, `geo_raw` + `raw_prims`) и статическая POP-цепочка:
+  `dattoPOP (точки + примитивы) → glslPOP → hook → группы задержки → dmxfixturePOP на профиль → dmxoutPOP на группу вывода`
+  (спайк 1.1: примитивы с uint-адресами строятся из таблицы примитивов; `linebreakPOP` + `attributeconvertPOP` — запасной путь, тоже проверен).
 - Шейдер обработки `px_process.glsl`: выборка точкой, `Master`, `brightness`, `color`, `mute`, активность.
 - Профили `dmxfixturePOP` из `fixture_type`: порядок цвета, 8/16 бит, `cell_extra`, «сырой» профиль head/tail.
 - Группы вывода и маршрутизация: таблицы для `dmxoutPOP`, 127.0.0.1 по умолчанию, broadcast, multicast, priority.
@@ -191,10 +192,10 @@ dsm (baseCOMP, parentshortcut='dsm', ext0object=op('./engine_ext').module.DsmEng
 │   callbacks (DAT, par Callbacks), px_process_glsl (DAT ↔ src/glsl/px_process.glsl)
 ├── in1 (inTOP)                                   # единственный вход
 ├── input/        crop → resize → levels → in_prepared (nullTOP)
-├── tables/       geo_cells, geo_raw, profiles, delay_groups, out_groups, routing_<grp>, info (tableDAT)
-├── engine/       pts_cells (dattoPOP) → strips_cells (linebreakPOP) → addr_cells (attributeconvertPOP)
+├── tables/       geo_cells, geo_prims, geo_raw, raw_prims, fx_arrows, profiles, delay_groups, out_groups, routing_<grp>, info (tableDAT)
+├── engine/       pts_cells (dattoPOP: geo_cells + geo_prims → line strip с uint-адресами на примитиве)
 │                 → px_process (glslPOP, sampler=in_prepared) → px_out (nullPOP)
-│                 pts_raw (dattoPOP) → strips_raw → addr_raw → raw_out (nullPOP)
+│                 pts_raw (dattoPOP: geo_raw + raw_prims) → raw_out (nullPOP)
 ├── hook/         in1 (inPOP) → out1 (outPOP)     # точка подключения
 ├── delay/        rep_delay (replicatorCOMP по delay_groups) → tpl_delay/{keep (deletePOP dgrp==k), cache (cachePOP)}
 │                 → merge_delay (mergePOP) → px_final (nullPOP)
@@ -291,8 +292,8 @@ flowchart LR
 | 2.6 | патч не записывается | `DsmEngineExt` (нет вызовов `save`) | — | — |
 | 2.7 | автоперезагрузка по изменению файла, пара включена по умолчанию | `watch/` | `Autoreload` → `folderDAT.active` | загрузка |
 | 2.8 | без патча — ничего не слать, статус | `DsmEngineExt`, `output/*/out.active` | info `status` | — |
-| 3.1 | примитив = сегмент, точки по `data_index` | `geo_cells` (`LineBreak`), `strips_cells` | строки таблицы | — |
-| 3.2 | uint32 адрес на примитиве | `pts_cells` (uint), `addr_cells` (pointtoprim) | атрибуты `DMXFixture*` | спайк |
+| 3.1 | примитив = сегмент, точки по `data_index` | `geo_prims` (`vertices`), `pts_cells` | строки таблицы | спайк 1.1 ✓ |
+| 3.2 | uint32 адрес на примитиве | `pts_cells` (`primattr` uint из `geo_prims`) | атрибуты `DMXFixture*` | спайк 1.1 ✓ |
 | 3.3 | атрибуты точки UV, позиция, индексы, активность | `geo_cells` колонки `P`, `Tex`, `cell`, `fx`, `active` | — | — |
 | 3.4 | UV по длине дуги `(i+0,5)/n`, direction, cell_offset | `dsm_geometry.cell_positions` | `cell_order` ядра | — |
 | 3.5 | матрица в `rect`, поворот, `cell_order` | `dsm_geometry.rect_grid` | `cell_order` | — |
@@ -315,7 +316,7 @@ flowchart LR
 | 5.2 | раскладка по `color_order`; W/A = 0 | профиль `dmxfixturePOP`: `attr = Color(перестановка)`, константы 0 | `profiles` | — |
 | 5.3 | 16 бит старший/младший | `dmxchan valueres=b16, normalized` | `profiles.bits` | — |
 | 5.4 | head/tail/cell_extra из `default` | `geo_raw` + `fixture_raw`; блоки `cell_extra` константами | `profiles` | — |
-| 5.5 | квантование совпадает со стендом | `engine_check` фиксирует правило (floor/round) и сравнивает | `cell_table` | проверка |
+| 5.5 | квантование совпадает со стендом | правило `floor(v·255)` (спайк 1.1); `engine_check` сравнивает | `cell_table` | проверка |
 | 5.6 | точка подключения между выборкой и выводом | `hook/` (`inPOP → outPOP`) | атрибуты `Color`, `fx`, `cell`, `active` | кадр |
 | 5.7 | всё на GPU; смена Master/Active — без пересборки | `px_process` униформ, `out.active` | — | кадр |
 | 6.1 | один `dmxfixturePOP` на профиль, один `dmxoutPOP` на группу | `fixtures/`, `output/` репликаторы | `profiles`, `out_groups` | — |
@@ -466,7 +467,9 @@ class DsmEngineExt:
 @dataclass(frozen=True)
 class GeoTables:
     cells_rows: list[list[str]]       # заголовок + строка на ячейку (см. колонки ниже)
+    prims_rows: list[list[str]]       # заголовок + строка на сегмент ячеек: vertices + uint-адрес
     raw_rows: list[list[str]]         # заголовок + строка на служебный канал head/tail
+    raw_prims_rows: list[list[str]]   # строка на сегмент head/tail
     profiles_rows: list[list[str]]    # prof, type_id, color_order, bits, n_extra, extra_defaults
     delay_groups: list[list[str]]     # dgrp, frames, delay_ms
     out_groups: list[list[str]]       # grp, protocol, multicast, rate_hz, art_sync, output_ids
@@ -481,8 +484,9 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
 ```
 Колонки `geo_cells`: `P(0) P(1) P(2)` (px холста, z = 0), `Tex(0) Tex(1)` (UV, V вверх как в TD),
 `cell` (data_index), `fx` (индекс фикстуры), `prof`, `dgrp`, `active` (0/1), `bright`, `col(0) col(1) col(2)`,
-`mute`, `LineBreak` (1 на первой ячейке сегмента), `DMXFixtureUniverse`, `DMXFixtureChannel`,
-`DMXFixtureNetAddress(0..3)`. Колонки `geo_raw`: `v` (default/255), `fx`, `dgrp`, `LineBreak`, адресные.
+`mute`, `Color(0..3)` (стартовое значение 0, пишет шейдер). Колонки `geo_prims` (строка = сегмент ядра):
+`vertices` (индексы строк `geo_cells` через пробел, порядок `data_index`), `fx`, `seg`, `DMXFixtureUniverse`,
+`DMXFixtureChannel`, `DMXFixtureNetAddress(0..3)`. `geo_raw`: `v` (default/255), `fx`, `dgrp`; `raw_prims` — как `geo_prims`.
 - Pre: формы `line`/`polyline`/`rect`; остальные — в `warnings`, строки не создаются.
 - Post: число строк `geo_cells` = Σ `n_cells` сегментов `kind=cells` выводимых фикстур; порядок строк — порядок
   сегментов `segments_by_fixture` (фикстуры по патчу), внутри сегмента — `data_index` от `first_cell`.
@@ -498,13 +502,13 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
 
 **Batch / Job Contract** (кук):
 - Trigger: кук хозяина; вход — `in_prepared`, `geo_*`, `profiles`, `routing_*`.
-- `pts_cells` (`dattoPOP`): блоки `attr` задают тип колонок явно: `P` float3, `Tex` float2, `cell`/`fx`/`prof`/`dgrp`
-  uint, `active`/`mute` uint, `bright` float, `col` float3, `LineBreak` uint, `DMXFixtureUniverse`/`Channel` uint,
-  `DMXFixtureNetAddress` uint4.
-- `strips_cells` (`linebreakPOP`): `connecmode=noconnec`, `uselinebreak=True`, `linebreakname=LineBreak`,
-  `everyn=False`, `bydistancethreshold=False`, `useinputlinebreaks=False`, `uselinestripindex=False`.
-- `addr_cells` (`attributeconvertPOP`): `pointtoprim` для `DMXFixtureUniverse DMXFixtureChannel DMXFixtureNetAddress`,
-  `deleteorig=True`. **Спайк**: тип остаётся uint → ок; иначе `routingtable` на `dmxfixturePOP` (строки из `profiles`).
+- `pts_cells` (`dattoPOP`): `pointsdat=geo_cells` — блоки `attr` задают тип колонок явно: `P` float3, `Tex` float2,
+  `cell`/`fx`/`prof`/`dgrp` uint, `active`/`mute` uint, `bright` float, `col` float3, `Color` color4
+  (автоконвертация `Color` не создаёт); `primitivesdat=geo_prims`, `primtype=linestrips`, `primverticescol=vertices`
+  (индексы строк `geo_cells` через пробел, строка = сегмент ядра), блоки `primattr` uint для `DMXFixtureUniverse`,
+  `DMXFixtureChannel`, `DMXFixtureNetAddress` (4). Спайк 1.1: примитивы приходят с uint32 класса primitive,
+  карта DMX совпадает с таблицей. Запасной путь (тоже проверен): `linebreakPOP` (`useinputlinebreaks=True`,
+  `linebreakname=LineBreak`) + `attributeconvertPOP pointtoprim` — uint сохраняется.
 - `px_process` (`glslPOP`): `sampler0top=../input/in_prepared`, `filter=linear`, `extendu/v=zero`; `vec0 uMaster`
   (bind на `parent.dsm.par.Master`); `outputattrs=Color`; шейдер:
   `Color = texture(sIn, Tex) · uMaster · bright · col · (1 − mute) · active`, альфа 1.
@@ -560,7 +564,7 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
   - **Группа задержки** `DelayGroup(dgrp, frames, delay_ms)`; `dgrp 0` — без задержки.
   - **Группа вывода** `OutGroup(grp, protocol, multicast, rate_hz, art_sync, output_ids)` и её маршрутизация.
   - **Профиль вывода** `ProfileRow(prof, type_id, color_order, bits, extra_defaults)`.
-- Инварианты: `fx` и `prof` — индексы в порядке патча; `LineBreak=1` ровно на первой ячейке каждого сегмента;
+- Инварианты: `fx` и `prof` — индексы в порядке патча; каждая строка `geo_cells` входит ровно в один сегмент `geo_prims`;
   ячейка одного сегмента целиком в одном юниверсе (гарантия ядра при `whole_pixel`).
 
 ### Data Contracts & Integration
@@ -595,11 +599,11 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
   - polyline с неравными отрезками — равномерно по длине; rect с поворотом 90° — клетки сетки на месте (3.4, 3.5).
   - матрица 4×4, все 16 раскладок: порядок `data_index` совпадает с `cell_order` ядра; матрица на `line` — как лента (3.5, 3.5a).
   - `units=m`, `px_per_m` → пиксели (3.6); `disabled`/`every_n` → `active=0`, адрес сохранён (3.7).
-  - `build_tables` на `sticks_8x_artnet.json`: число строк = Σ `n_cells`, `LineBreak` на `first_cell`, адресные
+  - `build_tables` на `sticks_8x_artnet.json`: число строк = Σ `n_cells`, строка `geo_prims` на сегмент с `vertices` от `first_cell`, адресные
     колонки = `segment_table`, фикстура с `channel_overlap` исключена, `unassigned` исключена (2.4, 2.5, 3.1, 3.2).
   - группы: два выхода с одинаковыми `rate/art_sync` → одна группа; `delay_ms=50` при 60 fps → 3 кадра; `ip=null` → `127.0.0.1` (6.4, 7.3, 7.5).
 - **Integration (внутри TD, `engine_check examples`)**:
-  - `primAttributes` после `addr_cells`: три атрибута uint, `numPrims` = число сегментов, все `DMXFixtureChannel` = `first_channel` (3.2, спайк).
+  - `primAttributes` после `pts_cells`: три атрибута uint, `numPrims` = число сегментов, все `DMXFixtureChannel` = `first_channel` (3.2, спайк).
   - `dmxmap_all` построчно = `segment_table` для каждого `examples/*.json` (3.11, 10.2).
   - Перехват байт в байт на 127.0.0.x для Art-Net и sACN, включая 511–512 и `bar_common_channels.json` (head/tail) (5.4, 6.10, 10.1).
   - 16 бит на `matrix_16x16_sacn.json` с `bits=16` вариантом (5.3); `GRB` на `strip_ws2812b.json` (5.2).
@@ -612,7 +616,7 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
 
 ## Performance & Scalability
 - Цели 8.1, 8.2; измерение — `totalCooks`, `realTime=False`, без опроса TD во время окна (как `perf_probe`).
-- Рычаги при превышении: `Pixelschop` выключен; превью упрощено; `linebreak` по сегменту даёт минимум примитивов;
+- Рычаги при превышении: `Pixelschop` выключен; превью упрощено; strip на сегмент из `geo_prims` даёт минимум примитивов;
   один `glslPOP`; при 50 000 — допускается strip на юниверс (ядро уже режет по юниверсам).
 - Сборка геометрии (3.10): строки собираются списками, таблица пишется одним `DAT.text`; замер входит в `perf`.
 

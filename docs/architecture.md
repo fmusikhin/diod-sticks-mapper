@@ -266,6 +266,17 @@ patch.json
   оставить точки») — иначе каналы считаются дважды.
 - `dmxoutPOP` кукается два раза за кадр (`totalCooks` растёт на 2); на стоимость не влияет.
 
+Найдено на спайке pixel-engine 1.1 (18.10.2026):
+
+- `dattoPOP` строит line strip с uint-атрибутами класса primitive прямо из двух таблиц (`pointsdat` + `primitivesdat`,
+  `primtype=linestrips`, колонка индексов точек через пробел, `primattr` с `overrideauto`/`uint`) — без `linebreakPOP`
+  и `attributeconvertPOP`; `attributeconvertPOP pointtoprim` uint32 тоже сохраняет.
+- `linebreakPOP` читает флаг входа параметром `useinputlinebreaks` (+ `linebreakname`), а не `uselinebreak`
+  (тот — про выходной атрибут): с одним `uselinebreak` получается один strip на всё.
+- `dattoPOP` автоматически создаёт `P`, но не `Color` — цвет задавать блоком `Color(*)` типа `color`; `LineBreak` — `int`.
+- `dmxfixturePOP`, `normalized`, 8 бит: байт = floor(v·255), усечение (0,5→127, 0,25→63, 0,999→254);
+  `autolayout` можно не выключать — адресные атрибуты примитива имеют приоритет.
+
 ## 15. Открытые вопросы
 
 - Сборка TD — 2025.33070 подтверждена этапом 0; лицензии пока нет (Non-Commercial, TOP ≤ 1280×1280).

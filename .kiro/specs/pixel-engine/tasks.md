@@ -8,7 +8,7 @@
 обязывают; оставлена проверяемая часть (сверка доков с компонентом скриптом, контрольная точка `.toe`).
 
 - [ ] 1. Фундамент: спайк адреса, файлы-источники, каркас компонента
-- [ ] 1.1 Спайк: адрес uint32 из таблицы доживает до карты DMX; правило квантования
+- [x] 1.1 Спайк: адрес uint32 из таблицы доживает до карты DMX; правило квантования
   - В `/project1/stand` собрать мини-цепочку: таблица из 2 сегментов (10 + 5 точек) → `dattoPOP` с явными
     типами колонок (uint для адресных) → `linebreakPOP` по флагу начала strip (все лишние режимы выключены
     явно) → `attributeconvertPOP` point→prim → `dmxfixturePOP` + `dmxmapDAT`
@@ -61,13 +61,14 @@
 
 - [ ] 2.2 Строки ячеек, служебных каналов и стрелок
   - Строки ячеек с колонками design (`P`, `Tex`, `cell`, `fx`, `prof`, `dgrp`, `active`, `bright`, `col`, `mute`,
-    `LineBreak`, адресные), порядок — сегменты `segments_by_fixture`, внутри — `data_index` от `first_cell`;
-    `LineBreak = 1` на первой ячейке сегмента; строки служебных каналов head/tail (`v = default/255`);
+    `Color`), порядок — сегменты `segments_by_fixture`, внутри — `data_index` от `first_cell`; таблица примитивов
+    `geo_prims` (строка = сегмент: `vertices` — индексы строк ячеек через пробел, uint-адрес) — по итогам спайка 1.1;
+    строки служебных каналов head/tail (`v = default/255`) и их `raw_prims`;
     таблица стрелок `fx_arrows` (фикстура, первая и последняя ячейка в px) для превью
   - Исключения из вывода: фикстуры из `Issue` уровня error, `unassigned`; формы `curve`/`arc`/`custom` и выборка
     `area`/`elongated` — предупреждения в `warnings`; `disabled`/`every_n` → `active = 0`, адрес сохранён
-  - Готово: на `sticks_8x_artnet.json` число строк = Σ `n_cells`, адресные колонки = `segment_table`,
-    `LineBreak` на каждом `first_cell`; фикстура с `channel_overlap` и `unassigned` отсутствуют;
+  - Готово: на `sticks_8x_artnet.json` число строк = Σ `n_cells`, адресные колонки `geo_prims` = `segment_table`,
+    `vertices` каждого сегмента начинаются с `first_cell`; фикстура с `channel_overlap` и `unassigned` отсутствуют;
     `bar_common_channels.json` даёт строки head/tail; `fx_arrows` — по строке на выводимую фикстуру
   - _Requirements: 2.4, 2.5, 3.1, 3.3, 3.7, 3.8, 4.2a, 4.4, 5.4_
 
@@ -85,7 +86,7 @@
 - [ ] 3.1 Загрузка, статус, колбэки, таблица info
   - `Reload`/`LoadPatch`: путь относительно `project.folder`; ядро — `load`, `auto_assign_all`, `validate`,
     `segments_by_fixture`, `routing_table`; `build_tables`; запись каждой таблицы одной операцией `text`
-    (`geo_cells`, `geo_raw`, `fx_arrows`, `profiles`, `delay_groups`, `out_groups`, `routing_<grp>`, `info`)
+    (`geo_cells`, `geo_prims`, `geo_raw`, `raw_prims`, `fx_arrows`, `profiles`, `delay_groups`, `out_groups`, `routing_<grp>`, `info`)
     только после успешного расчёта; раскладка `pixels_top` (`onerow` ≤ 16 384 ячеек, иначе `square`)
     выставляется парой здесь, по числу ячеек, а не выражением в кадре
   - Ошибка файла или схемы → таблицы не тронуты, `status = error`, `info.message` с путём к полю,
@@ -115,9 +116,8 @@
   - _Requirements: 1.9, 4.1, 4.2, 4.6_
 
 - [ ] 4.2 Геометрия из таблиц, выборка и обработка цвета
-  - `engine/`: `pts_cells` (`dattoPOP`, типы колонок явно) → `strips_cells` (`linebreakPOP` по `LineBreak`,
-    остальные режимы выключены) → `addr_cells` (путь по итогам 1.1) → `px_process` (`glslPOP`) → `px_out`;
-    та же цепочка для `geo_raw` → `raw_out`
+  - `engine/`: `pts_cells` (`dattoPOP`: `geo_cells` + `geo_prims`, `primtype=linestrips`, типы колонок и
+    `primattr` uint явно — путь B спайка 1.1) → `px_process` (`glslPOP`) → `px_out`; то же для `geo_raw` + `raw_prims` → `raw_out`
   - Шейдер `px_process.glsl`: `Color = texture(in_prepared, Tex) · uMaster · bright · col · (1 − mute) · active`,
     `sampler0filter = linear`, `extendu/v = zero`; `uMaster` привязан к `parent.dsm.par.Master`
   - `hook/`: baseCOMP с `inPOP → outPOP`, подключён после `px_out`; контракт атрибутов в `agents_md`
@@ -220,3 +220,9 @@
   - `td/dsm_dev.toe` — контрольная точка (канонический файл) после прохождения 6.x
   - Готово: режим `docs` — «расхождений нет»; коммит контрольной точки в ветку `spec/pixel-engine`
   - _Requirements: 8.4, 10.3, 10.6, 10.7_
+
+## Implementation Notes
+- 1.1 (18.10.2026): адрес на примитив — `dattoPOP` с `primitivesdat` (`primtype=linestrips`, `primattr` uint),
+  без `linebreakPOP`/`attributeconvertPOP`; `Color` в `dattoPOP` задавать блоком типа `color`; `linebreakPOP`
+  читает флаг входа через `useinputlinebreaks`; байт = floor(v·255); `autolayout` не мешает атрибутам.
+  Стенд: `/project1/stand/spike` (agents_md внутри). `.toe` не закоммичен — контрольная точка в задаче 7.
