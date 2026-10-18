@@ -630,6 +630,32 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
   один `glslPOP`; при 50 000 — допускается strip на юниверс (ядро уже режет по юниверсам).
 - Сборка геометрии (3.10): строки собираются списками, таблица пишется одним `DAT.text`; замер входит в `perf`.
 
+## Отклонения от design, принятые при реализации (18.10.2026)
+
+Факт — `docs/engine.md` (сверяется режимом `docs` стенда) и `## Implementation Notes` в `tasks.md`. Разделы выше
+оставлены как утверждённое решение; ниже — что изменилось и почему. Для `locate-test` и `palette-generators`
+контракт `hook` и таблиц брать отсюда и из `engine.md`.
+
+| Что в design | Что по факту | Почему |
+|---|---|---|
+| `geo_cells` без `ogrp`; `geo_raw` без `ogrp` | колонка `ogrp` (группа вывода) в обеих | `dmxoutPOP` шлёт все юниверсы указанных фикстур → `dmxfixturePOP` реплицируется на (профиль × группа вывода), нужна выборка по `ogrp`; таблицы `fixture_sets` / `raw_sets` |
+| `hook`: `Color` с альфой 1 | альфа 0; плюс атрибуты `ogrp`, `bright`, `col`, `mute` | альфа — «пустой» компонент для W/A в профилях без значения белого (блок `dmxfixturePOP` берёт свизлом); остальные — входы шейдера, оставлены для locate/palette |
+| `src/core` = родитель папки проекта | `find_core_dir`: поиск `src/core` с пакетом `dsm_core` вверх по дереву до 6 уровней | `.tox` в `td/stand/smoke.toe` иначе не находит ядро (находка ревью 6.3) |
+| `dmxmapDAT` всегда активны | карты активны только по запросу (`RefreshMaps(on, frames)`), иначе `active=False` | активная карта пересчитывается каждый кук: 10–25 мс CPU на 50 тыс. ячеек |
+| одна цепочка `keep`/`cache`/`merge` | `TuneBypass`: обход `keep_*`/`cache_*`/`merge_*` при одной группе задержки / одном наборе | экономия 0,3–0,5 мс на кадр в типовом патче |
+| 2 шаблона репликаторов | 5 мастеров в `templates` COMP (`fx_tpl`, `raw_tpl`, `delay_tpl`, `out_tpl`, `map_tpl`), `allowCooking=False` | шаблон в рабочей сети кукается и дублирует вывод; служебные каналы (`raw`) и карты — отдельные цепочки |
+| `Autoreload` → `folderDAT.active`; `onTableChange → Reload` | `watch_exec` → `CheckFile` (mtime в расширении), `Autoreload` проверяется в Python | устойчиво к правке в ту же секунду и к пересозданию модуля DAT |
+| публичные методы расширения: 5 | 10: + `ApplyActive`, `TuneBypass`, `RefreshMaps`, `CheckFile`, `PatchDir`/`PatchName`, `ResolvePath` | константы `active`/`rate` узлов ставит расширение (без выражений в кадре), колбэки репликаторов зовут его |
+| `delay/` одна цепочка | пары `_c` (ячейки) / `_r` (служебные каналы) | служебные каналы идут мимо `hook`: `engine/out2 → delay/in2` |
+| квантование 16 бит `round(v·65535)` (требование 5.3) | TD даёт `floor(float32(v)·255)` по старшему байту, младший 0 для сырых каналов; стенд считает `floor` | факт узла `dmxfixturePOP` (спайк 1.1); текст 5.3 — на решение заказчика |
+| broadcast без IP не оговорён | `_target_ip`: unicast без IP → 127.0.0.1 + `target_missing`, broadcast → 255.255.255.255 | безопасное умолчание принципа 6 README |
+| `grid_for_data` — только для сеток | для линейных форм дублирует `cell_order` ядра | защищено тестом эквивалентности `test_grid_for_data_matches_core_cell_order`; ячейка на границе юниверса при `whole_pixel=false` кладётся в первый partial-сегмент |
+
+Открыто у заказчика после `/kiro-validate-impl`: порог 8.1 (≤ 1 мс на 20 тыс.: факт 2,6–2,8 мс, пол `dmxfixturePOP`),
+бюджет превью 9.2 (≤ 0,5 мс: на форсированных куках 0,64–0,92 мс, steady-state не замерен отдельно), текст 5.3.
+Без автоматического факта (только заметки исполнителя): 7.4 ArtSync (широковещательный, перехват только 127.x),
+7.5 задержка (`delay_test.json` вне режима `examples`), 6.9 `Localaddress`, 4.7 форматы входа (стенд даёт 8-бит `constantTOP`).
+
 ## Supporting References
 - Факты операторов и альтернативы — `research.md` (Research Log, Risks).
 - Контракт ядра — `docs/core-api.md`; факты стенда — `docs/architecture.md` §13.
