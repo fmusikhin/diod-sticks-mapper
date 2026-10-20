@@ -51,7 +51,7 @@
 ### Revalidation Triggers
 - Изменение атрибутов точки в `hook` (`fx`, `cell`, `active`, `Color`) или порядка точек — перепроверить шейдер Locate.
 - Изменение состава и порядка реплик `output/out_g<j>` или их списка `fixture` — перепроверить место сырой фикстуры.
-- Изменение `SavePatch` / `AddListener` — перепроверить `mapping-editor` и `patch-view`, которые их используют.
+- Изменение `SavePatch` / `AddListener` / `AddInfoProvider` / `WriteInfo` — перепроверить `mapping-editor` и `patch-view`, которые их используют.
 - Изменение значений `Acceptance` в ядре — перепроверить лист приёмки и CSV.
 
 ## Architecture
@@ -352,6 +352,7 @@ def SavePatch(self, edit: Callable[[Patch], Patch], rebuild: bool) -> bool: ... 
 def AddListener(self, fn: Callable[[Patch, list[Issue]], None]) -> None: ...
 def SetCounterFilter(self, text: str | None) -> None: ...      # подстрока предупреждения узла, которую не передавать
 def AddInfoProvider(self, fn: Callable[[], list[list[str]]]) -> None: ...  # строки key/value, дописываются в info
+def WriteInfo(self) -> None: ...                               # переписать info сейчас (после команды Locate)
 ```
 - Патч для записи — документ, заново прочитанный из файла (`api.load`, до автоадресации), с той же правкой; правка
   применяется и к рабочему патчу в памяти. Иначе в файл ушли бы адреса, раздаваемые автоадресацией (8.7).

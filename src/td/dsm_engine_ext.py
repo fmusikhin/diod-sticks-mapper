@@ -64,13 +64,23 @@ def ensure_core_on_path() -> None:
         sys.path.insert(0, path)
 
 
+def _same_hook(a, b) -> bool:
+    """Тот же хук: та же функция или тот же метод того же класса (расширение переинициализировано отдельно —
+    старый bound-метод прежнего экземпляра заменяется, а не дублируется)."""
+    if a == b:
+        return True
+    sa, sb = getattr(a, "__self__", None), getattr(b, "__self__", None)
+    return (sa is not None and sb is not None and type(sa).__name__ == type(sb).__name__
+            and getattr(a, "__name__", None) == getattr(b, "__name__", None))
+
+
 def rows_to_text(rows: list[list[str]]) -> str:
     return "\n".join("\t".join(str(c) for c in r) for r in rows)
 
 
 class DsmEngineExt:
     """Публичные методы (с заглавной — промоутятся на COMP): Reload, LoadPatch, ReportError, ApplyActive, CheckFile,
-    PatchDir, PatchName, ResolvePath, UpdateCounters, SavePatch, AddListener, AddInfoProvider, SetCounterFilter."""
+    PatchDir, PatchName, ResolvePath, UpdateCounters, SavePatch, AddListener, AddInfoProvider, WriteInfo, SetCounterFilter."""
 
     def __init__(self, ownerComp) -> None:
         self.ownerComp = ownerComp
@@ -227,13 +237,15 @@ class DsmEngineExt:
     def AddListener(self, fn: Callable) -> None:
         """Внутренний слушатель успешной загрузки ``fn(patch, issues)`` — для частей компонента (Locate),
         колбэк пользователя onPatchLoaded остаётся свободным."""
-        if fn not in self._listeners:
-            self._listeners.append(fn)
+        self._listeners = [f for f in self._listeners if not _same_hook(f, fn)] + [fn]
 
     def AddInfoProvider(self, fn: Callable) -> None:
         """Поставщик дополнительных строк info ``fn() -> [[key, value], ...]`` — дописываются при каждой записи info."""
-        if fn not in self._info_providers:
-            self._info_providers.append(fn)
+        self._info_providers = [f for f in self._info_providers if not _same_hook(f, fn)] + [fn]
+
+    def WriteInfo(self) -> None:
+        """Переписать таблицу info сейчас (внутренние поставщики строк зовут после своих команд)."""
+        self._write_info()
 
     def SetCounterFilter(self, text: str | None) -> None:
         """Подстрока предупреждения узла, которую счётчики не передают в info и onOutputError (None — снять)."""
