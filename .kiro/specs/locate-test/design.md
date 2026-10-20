@@ -127,9 +127,13 @@ td/stand/
 ```
 
 ### Modified Files
-- `src/td/dsm_engine_ext.py` — `SavePatch(patch, rebuild)` (резервная копия при первой записи за сеанс, запись через
+- `src/td/dsm_engine_ext.py` — `SavePatch(edit, rebuild)` (резервная копия при первой записи за сеанс, запись через
   ядро, `loaded_mtime`, без пересборки при `rebuild=False`), `AddListener(fn)` и вызов слушателей в конце `LoadPatch`,
-  фильтр предупреждения о наложении каналов в `UpdateCounters`, пока активен сырой адрес (флаг от Locate).
+  фильтр предупреждения о наложении каналов в `UpdateCounters`, пока активен сырой адрес (флаг от Locate);
+  `AddInfoProvider(fn)` — дополнительные строки `info` от Locate дописываются в каждом `_write_info` (после загрузки,
+  в `ReportError`, в `UpdateCounters`), иначе они стирались бы раз в секунду.
+- `src/td/dsm_output_callbacks.py` (новый, синхронизированный DAT `output/rep_callbacks`) — колбэк репликатора вывода
+  выносится в текст из `.toe`; дописывает сырую фикстуру последней в список фикстур каждой реплики.
 - `src/td/dsm_callbacks_default.py` — шаблон `onLocate(target, mode)`.
 - `tools/engine_check.py` — режим `locate` (перехват байт в байт против эталона `dsm_locate`, отклик, стоимость кадра,
   лист приёмки на копии патча).
@@ -139,6 +143,8 @@ td/stand/
   `locate_glsl`; `hook/locate` + `hook/locate_fx_chop`; `tables/locate_fx`, `tables/locate_raw`, `tables/locate_sheet`; `locate_timer` (`timerCHOP` автошага) и `locate_parexec` (`parexecuteDAT` пар `Locate`); `output/raw`
   (`raw_pts`, `raw_prims`, `raw_geo`, `raw_fix`); колбэк репликатора вывода дописывает `raw_fix` последним;
   `ui_test`; `Version = 0.2`; `agents_md`.
+- Время шейдера: униформа `uTime` берётся без Python-кука в кадре — проверенный оптимизированный путь выражения
+  или канал CHOP времени; факт фиксируется при сборке шейдера.
 
 ## System Flows
 
@@ -342,12 +348,16 @@ class DsmLocateExt:
 
 ##### Service Interface
 ```python
-def SavePatch(self, patch: Patch, rebuild: bool) -> bool: ...   # False + ReportError-сообщение при ошибке записи
+def SavePatch(self, edit: Callable[[Patch], Patch], rebuild: bool) -> bool: ...   # False + ReportError при ошибке записи
 def AddListener(self, fn: Callable[[Patch, list[Issue]], None]) -> None: ...
 def SetCounterFilter(self, text: str | None) -> None: ...      # подстрока предупреждения узла, которую не передавать
+def AddInfoProvider(self, fn: Callable[[], list[list[str]]]) -> None: ...  # строки key/value, дописываются в info
 ```
+- Патч для записи — документ, заново прочитанный из файла (`api.load`, до автоадресации), с той же правкой; правка
+  применяется и к рабочему патчу в памяти. Иначе в файл ушли бы адреса, раздаваемые автоадресацией (8.7).
+  Метод: `SavePatch(edit: Callable[[Patch], Patch], rebuild)` — функция правки применяется к обоим.
 - `SavePatch`: при первой записи за сеанс копирует файл в `<имя>.bak.json` рядом; `api.save` (временный файл); при успехе
-  `loaded_mtime` = новая дата; `rebuild=False` — `self.patch = patch`, `info` без пересборки; `rebuild=True` — `LoadPatch`.
+  `loaded_mtime` = новая дата; `rebuild=False` — рабочий патч = `edit(self.patch)`, `issues` и таблицы прежние, `info` без пересборки; `rebuild=True` — `LoadPatch`.
   Ошибка записи — прежний файл, `ReportError`, патч в памяти не меняется (8.5).
 - `LoadPatch` в конце вызывает слушателей (исключение слушателя — в textport, загрузка не прерывается).
 
@@ -432,7 +442,9 @@ def SetCounterFilter(self, text: str | None) -> None: ...      # подстро�
 
 ### Строки `info` Locate
 `locate_target`, `locate_mode`, `locate_others`, `locate_walk` (`off / on N из M`), `locate_raw` (`off / out1 u0 1–512 = 255`),
-`locate_pattern`, `locate_message`, `acceptance_<статус>` (сводка).
+`locate_pattern`, `locate_message`, `acceptance_<статус>` (сводка). Пишутся через `AddInfoProvider` движка.
+- После перезагрузки патча (реплики вывода пересоздаются) `OnPatchLoaded` заново включает сырой адрес у новой реплики
+  группы выхода, когда реплики появились, или снимает его с сообщением, если выхода нет в новом патче.
 
 ### Лист приёмки (`tables/locate_sheet`, CSV)
 `n` (порядковый), `id`, `name`, `output`, `universe`, `channel`, `status` — по строке на фикстуру; CSV — разделитель `;`,
