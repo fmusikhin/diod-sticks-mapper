@@ -348,7 +348,7 @@ class DsmLocateExt:
 
 ##### Service Interface
 ```python
-def SavePatch(self, edit: Callable[[Patch], Patch], rebuild: bool) -> bool: ...   # False + ReportError при ошибке записи
+def SavePatch(self, edit: Callable[[Patch], Patch], rebuild: bool) -> bool: ...   # False + сообщение в info и onOutputError
 def AddListener(self, fn: Callable[[Patch, list[Issue]], None]) -> None: ...
 def SetCounterFilter(self, text: str | None) -> None: ...      # подстрока предупреждения узла, которую не передавать
 def AddInfoProvider(self, fn: Callable[[], list[list[str]]]) -> None: ...  # строки key/value, дописываются в info
@@ -358,7 +358,9 @@ def AddInfoProvider(self, fn: Callable[[], list[list[str]]]) -> None: ...  # с�
   Метод: `SavePatch(edit: Callable[[Patch], Patch], rebuild)` — функция правки применяется к обоим.
 - `SavePatch`: при первой записи за сеанс копирует файл в `<имя>.bak.json` рядом; `api.save` (временный файл); при успехе
   `loaded_mtime` = новая дата; `rebuild=False` — рабочий патч = `edit(self.patch)`, `issues` и таблицы прежние, `info` без пересборки; `rebuild=True` — `LoadPatch`.
-  Ошибка записи — прежний файл, `ReportError`, патч в памяти не меняется (8.5).
+  Ошибка записи — прежний файл, сообщение в `info` и `onOutputError` без смены статуса движка (вывод не
+  останавливается), патч в памяти не меняется, временный файл ядра удаляется (8.5). Пишется файл загруженного
+  патча (`patch_path`), а не пары `Patchfile`.
 - `LoadPatch` в конце вызывает слушателей (исключение слушателя — в textport, загрузка не прерывается).
 
 #### `hook/locate` (GPU)
