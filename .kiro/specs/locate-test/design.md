@@ -276,7 +276,9 @@ def raw_rows(patch: Patch, output_id: str, universe: int, first: int, last: int,
 def sheet_rows(patch: Patch, segments: dict[str, list[Segment]]) -> list[list[str]]: ...  # заголовок + строка на фикстуру
 def sheet_summary(patch: Patch) -> dict[str, int]: ...
 def sheet_csv(rows: list[list[str]]) -> str: ...
-def expected_color(state: LocateState, row: FxRow, cell: int, content: tuple[float, float, float], t: float) -> tuple[float, float, float]: ...
+def expected_color(state: LocateState, row: FxRow, cell: int, active: bool, content: tuple[float, float, float],
+                   t: float, total: int, nfx: int) -> tuple[float, float, float]: ...   # total/nfx — fixture_totals(rows)
+def fixture_totals(rows: list[FxRow]) -> tuple[int, int]: ...   # сумма ncells выводимых, число выводимых
 ```
 - Preconditions: патч загружен ядром; `segments` — `segments_by_fixture(patch)`.
 - Postconditions: `resolve_target` не возвращает пустую цель — пустая цель без пропусков → `TargetError`.
@@ -329,8 +331,9 @@ class DsmLocateExt:
   состояние прежнее (1.5).
 
 ##### State Management
-- `LocateState(target: Target | None, mode, others, level, dim, blink_hz, smooth, pattern, test_color, walk: bool,
-  walk_loop, walk_unchecked, walk_step_s, raw: RawState | None, message)`.
+- `LocateState(target: Target | None, mode, others, level, dim, blink_hz, smooth, pattern, test_color, run_sec, walk: bool,
+  walk_loop, walk_unchecked, walk_step_s, raw: RawRows | None, message)` — dataclass `LocateState` в `dsm_locate`; цель только из не выводимых
+  фикстур — `active()` ложно (Locate не трогает вывод, 1.6).
 - Пары страницы `Locate` — отражение состояния: метод меняет пару, пара через `parexecuteDAT` вызывает метод
   (защита от повторного входа флагом).
 
@@ -380,9 +383,12 @@ def WriteInfo(self) -> None: ...                               # перепис�
   Источник — `tables/locate_fx` → `hook/locate_fx_chop` (`dattoCHOP`, каналы по колонкам, сэмпл = фикстура).
 - Униформы: `uMode` (0 blink, 1 direction, 2 number, 3 address, 4 fill, 5 rgbw, 6 chase), `uOthers` (0 solo, 1 dim, 2 over),
   `uLevel`, `uDim`, `uBlinkHz`, `uSmooth`, `uRunSec`, `uTestColor`, `uTime` (= `absTime.seconds`), `uFreeze` (−1 — живое
-  время; ≥ 0 — фиксированное время для стенда), `uTotal` (сумма ячеек для `chase`).
+  время; ≥ 0 — фиксированное время для стенда), `uTotal` (сумма ячеек выводимых фикстур) и `uNfx` (их число) для `chase`.
 - Правила: `active == 0` → `Color` без изменений (2.6); цель → цвет режима × `uLevel`, без `Master` (9.2); остальные →
   0 / `Color × uDim` / `Color`; режимы паттернов — все выводимые как цель.
+- Формулы режимов (эталон — `dsm_locate.expected_color`): мигание — `frac(t·hz) < 0.5` или `0.5 − 0.5·cos(2π·frac(t·hz))`;
+  направление — ячейка 0 красная, n−1 синяя, бегущая белая по внутренним 1..n−2: `1 + floor(frac(t/run_sec)·(n−2))`
+  (концы-маркеры не перекрывает); `rgbw` — `floor(t) mod 4`; `chase` — `floor(frac(t/(run_sec·nfx))·total)` по `offset + cell`.
 - `bypass = True`, когда Locate и паттерн выключены (9.5, 10.3).
 
 **Implementation Notes**

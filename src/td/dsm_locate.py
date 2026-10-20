@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from dsm_core.addressing import Segment, segments_by_fixture
@@ -336,6 +337,114 @@ def sheet_summary(patch: Patch) -> dict[str, int]:
 def sheet_csv(rows: list[list[str]]) -> str:
     """CSV листа приёмки: разделитель ``;``, строка для записи в UTF-8 — писатель ядра ``rows_to_csv``."""
     return rows_to_csv(rows, SHEET_DIALECT)
+
+
+# ---------- состояние Locate и эталон цвета ячейки (правила те же, что у шейдера hook/locate) ----------
+
+RGB = tuple[float, float, float]
+
+_LAYOUT_RGB: dict[str, RGB] = {"red": (1.0, 0.0, 0.0), "green": (0.0, 1.0, 0.0), "blue": (0.0, 0.0, 1.0),
+                               "white": (1.0, 1.0, 1.0), "dim": (0.1, 0.1, 0.1), "off": (0.0, 0.0, 0.0)}
+_RGBW: tuple[RGB, ...] = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0), (1.0, 1.0, 1.0))
+_WHITE: RGB = (1.0, 1.0, 1.0)
+_BLACK: RGB = (0.0, 0.0, 0.0)
+
+
+@dataclass(frozen=True)
+class LocateState:
+    """Состояние Locate; умолчания — таблица пар страницы ``Locate`` (design)."""
+    target: Target | None = None
+    mode: str = "blink"                   # MODES
+    others: str = "solo"                  # OTHERS
+    level: float = 0.3
+    dim: float = 0.2
+    blink_hz: float = 2.0
+    smooth: bool = False
+    run_sec: float = 2.0
+    pattern: str = "off"                  # PATTERNS
+    test_color: RGB = (1.0, 1.0, 1.0)
+    walk: bool = False
+    walk_loop: bool = True
+    walk_unchecked: bool = False
+    walk_step_s: float = 3.0
+    raw: RawRows | None = None
+    message: str = ""
+
+    def active(self) -> bool:
+        """Locate что-то подсвечивает: тест-паттерн не ``off`` или в цели есть выводимые фикстуры.
+        Цель только из не выводимых (1.6) — Locate не меняет вывод (иначе соло гасит весь риг), причина — в сообщении."""
+        return self.pattern != "off" or (self.target is not None and bool(self.target.fixtures))
+
+
+def _frac(x: float) -> float:
+    return x - math.floor(x)
+
+
+def _mul(c, k: float) -> RGB:
+    return (float(c[0]) * k, float(c[1]) * k, float(c[2]) * k)
+
+
+def fixture_totals(rows: list[FxRow]) -> tuple[int, int]:
+    """(сумма ``ncells`` выводимых фикстур, число выводимых фикстур) — входы бегущей точки ``chase``."""
+    out = [r for r in rows if r.ncells > 0]
+    return sum(r.ncells for r in out), len(out)
+
+
+def _pattern_color(state: LocateState, row: FxRow, cell: int, t: float, total: int, nfx: int) -> RGB:
+    if state.pattern == "fill":
+        return _mul(state.test_color, state.level)
+    if state.pattern == "rgbw":
+        return _mul(_RGBW[int(math.floor(t / 1.0)) % 4], state.level)
+    if state.pattern == "chase":
+        if total <= 0 or nfx <= 0:
+            return _BLACK
+        p = int(math.floor(_frac(t / (state.run_sec * nfx)) * total))
+        return _mul(_WHITE, state.level) if row.offset + cell == p else _BLACK
+    raise ValueError(f"неизвестный тест-паттерн: {state.pattern!r}")
+
+
+def _target_color(state: LocateState, row: FxRow, cell: int, t: float) -> RGB:
+    n = row.ncells
+    if state.mode == "blink":
+        if state.smooth:
+            return _mul(_WHITE, state.level * (0.5 - 0.5 * math.cos(2.0 * math.pi * _frac(t * state.blink_hz))))
+        return _mul(_WHITE, state.level) if _frac(t * state.blink_hz) < 0.5 else _BLACK
+    if state.mode == "direction":
+        if cell == 0:
+            return _mul(_LAYOUT_RGB["red"], state.level)
+        if cell == n - 1:
+            return _mul(_LAYOUT_RGB["blue"], state.level)
+        if n >= 3 and cell == 1 + int(math.floor(_frac(t / state.run_sec) * (n - 2))):
+            return _mul(_WHITE, state.level)
+        return _BLACK
+    if state.mode == "number":
+        return _mul(_LAYOUT_RGB[number_layout(row.number, n)[0][cell]], state.level)
+    if state.mode == "address":
+        return _mul(_LAYOUT_RGB[address_layout(row.uni, row.ch, n)[0][cell]], state.level)
+    raise ValueError(f"неизвестный режим Locate: {state.mode!r}")
+
+
+def expected_color(state: LocateState, row: FxRow, cell: int, active: bool, content, t: float,
+                   total: int, nfx: int) -> RGB:
+    """Эталон цвета одной ячейки (float RGB 0..1) — то, что шейдер ``hook/locate`` кладёт в ``Color``.
+
+    ``active`` — ячейка не отключена (``disabled``/``every_n``); ``content`` — цвет контента ячейки; ``t`` — время, с;
+    ``total``/``nfx`` — ``fixture_totals`` выводимых фикстур (для ``chase``). Цвет цели и паттерна не зависит от
+    ``content`` и ``Master`` (9.2).
+    """
+    if not active or not state.active():
+        return content
+    if state.pattern != "off":
+        return _pattern_color(state, row, cell, t, total, nfx) if row.ncells > 0 else content
+    if row.target == 1:
+        return _target_color(state, row, cell, t)
+    if state.others == "solo":
+        return _BLACK
+    if state.others == "dim":
+        return _mul(content, state.dim)
+    if state.others == "over":
+        return content
+    raise ValueError(f"неизвестное поведение остальных: {state.others!r}")
 
 
 def step(order: list[int], current: int | None, delta: int, loop: bool) -> int | None:

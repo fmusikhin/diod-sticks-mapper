@@ -810,3 +810,315 @@ def test_sheet_csv_uses_core_writer():
     from dsm_core.csv_io import CsvDialect, rows_to_csv
     rows = [["a", "b;c", "Ё"], ["1", "2.5", 'q"']]
     assert dsm_locate.sheet_csv(rows) == rows_to_csv(rows, CsvDialect(";", "."))
+
+
+# ---------- 2.4: состояние Locate и эталон цвета ячейки ----------
+# Требования 2.1–2.6, 3.1–3.3, 6.1, 9.1, 9.2, 12.1. Фазы времени — середины интервалов (стенд берёт их же).
+
+import math
+
+from dsm_locate import FxRow
+
+_CONTENT = (0.8, 0.4, 0.6)
+_BLACK = (0.0, 0.0, 0.0)
+_TGT = Target(spec="fx1", fixtures=(0,))
+
+
+def _st(**kw):
+    kw.setdefault("target", _TGT)
+    return dsm_locate.LocateState(**kw)
+
+
+def _row(target=1, n=10, offset=0, number=1, uni=0, ch=1, fx=0):
+    return FxRow(fx=fx, target=target, number=number, uni=uni, ch=ch, ncells=n, offset=offset)
+
+
+def _col(state, row, cell=0, active=True, content=_CONTENT, t=0.1, total=10, nfx=1):
+    return dsm_locate.expected_color(state, row, cell, active, content, t, total, nfx)
+
+
+def _approx(c):
+    return pytest.approx(c, abs=1e-12)
+
+
+def _scale(c, k):
+    return tuple(x * k for x in c)
+
+
+def test_locate_state_defaults():
+    s = dsm_locate.LocateState()
+    assert (s.target, s.mode, s.others, s.level, s.dim, s.blink_hz, s.smooth, s.run_sec, s.pattern, s.test_color,
+            s.walk, s.walk_loop, s.walk_unchecked, s.walk_step_s, s.raw, s.message) == (
+        None, "blink", "solo", 0.3, 0.2, 2.0, False, 2.0, "off", (1.0, 1.0, 1.0), False, True, False, 3.0, None, "")
+    with pytest.raises(Exception):
+        s.level = 1.0                                          # frozen
+
+
+def test_locate_state_active():
+    assert not dsm_locate.LocateState().active()
+    assert _st().active()
+    assert dsm_locate.LocateState(pattern="fill").active()
+    assert dsm_locate.LocateState(target=None, pattern="chase").active()
+
+
+def test_target_without_output_fixtures_does_not_darken_rig():
+    """1.6: цель только из не выводимых фикстур — Locate не трогает вывод (соло не гасит весь риг)."""
+    empty = Target(spec="fx10", fixtures=(), skipped=((9, "нет адреса"),))
+    s = dsm_locate.LocateState(target=empty, others="solo")
+    assert not s.active()
+    assert _col(s, _row(target=0)) == _CONTENT
+
+
+def test_off_returns_content():
+    s = dsm_locate.LocateState(mode="blink", others="solo")
+    for target in (0, 1):
+        assert _col(s, _row(target=target)) == _CONTENT
+
+
+ALL_MODES = [("blink", False), ("blink", True), ("direction", False), ("number", False), ("address", False)]
+
+
+@pytest.mark.parametrize("mode,smooth", ALL_MODES)
+@pytest.mark.parametrize("others", ["solo", "dim", "over"])
+@pytest.mark.parametrize("target", [0, 1])
+def test_disabled_cell_is_content(mode, smooth, others, target):
+    s = _st(mode=mode, smooth=smooth, others=others)
+    assert _col(s, _row(target=target), cell=3, active=False, t=0.35) == _CONTENT
+
+
+@pytest.mark.parametrize("pattern", ["fill", "rgbw", "chase"])
+def test_disabled_cell_is_content_in_patterns(pattern):
+    s = dsm_locate.LocateState(pattern=pattern)
+    assert _col(s, _row(target=0), cell=0, active=False, t=0.5) == _CONTENT
+
+
+@pytest.mark.parametrize("mode,smooth", ALL_MODES)
+@pytest.mark.parametrize("others,expect", [("solo", _BLACK), ("dim", _scale(_CONTENT, 0.2)), ("over", _CONTENT)])
+def test_others_same_in_all_modes(mode, smooth, others, expect):
+    s = _st(mode=mode, smooth=smooth, others=others)
+    for t in (0.1, 0.35, 1.125):
+        for cell in (0, 4, 9):
+            assert _col(s, _row(target=0), cell=cell, t=t) == _approx(expect)
+
+
+def test_others_dim_factor():
+    s = _st(others="dim", dim=0.5)
+    assert _col(s, _row(target=0)) == _approx(_scale(_CONTENT, 0.5))
+
+
+@pytest.mark.parametrize("others", ["solo", "dim", "over"])
+def test_blink_square_wave(others):
+    s = _st(others=others)
+    for cell in (0, 5, 9):
+        assert _col(s, _row(), cell=cell, t=0.1) == _approx((0.3, 0.3, 0.3))
+        assert _col(s, _row(), cell=cell, t=0.35) == _approx(_BLACK)
+        assert _col(s, _row(), cell=cell, t=0.6) == _approx((0.3, 0.3, 0.3))
+
+
+def test_blink_hz():
+    s = _st(blink_hz=1.0)
+    assert _col(s, _row(), t=0.35) == _approx((0.3, 0.3, 0.3))
+    assert _col(s, _row(), t=0.75) == _approx(_BLACK)
+
+
+@pytest.mark.parametrize("t,k", [(0.0, 0.0), (0.125, 0.5), (0.25, 1.0), (0.375, 0.5), (0.5, 0.0)])
+def test_blink_smooth(t, k):
+    s = _st(smooth=True)
+    assert _col(s, _row(), cell=2, t=t) == _approx((0.3 * k,) * 3)
+
+
+@pytest.mark.parametrize("level", [0.3, 1.0, 0.0])
+def test_level_and_content_independent(level):
+    s = _st(level=level)
+    for content in (_CONTENT, _BLACK, (1.0, 1.0, 1.0)):
+        assert _col(s, _row(), t=0.1, content=content) == _approx((level,) * 3)
+
+
+def _fx_colors(state, n, t):
+    return [_col(state, _row(n=n), cell=c, t=t) for c in range(n)]
+
+
+R, B, W = (0.3, 0.0, 0.0), (0.0, 0.0, 0.3), (0.3, 0.3, 0.3)
+
+
+def test_direction_n1():
+    s = _st(mode="direction")
+    for t in (0.1, 1.1):
+        assert _fx_colors(s, 1, t) == [_approx(R)]
+
+
+def test_direction_n2():
+    s = _st(mode="direction")
+    for t in (0.1, 1.1):
+        assert _fx_colors(s, 2, t) == [_approx(R), _approx(B)]
+
+
+def test_direction_n3_runner_fixed_on_middle():
+    s = _st(mode="direction")
+    for t in (0.1, 0.9, 1.9):
+        assert _fx_colors(s, 3, t) == [_approx(R), _approx(W), _approx(B)]
+
+
+@pytest.mark.parametrize("t,r", [(0.125, 1), (0.375, 2), (1.125, 5), (1.875, 8), (2.125, 1)])
+def test_direction_n10_runner(t, r):
+    s = _st(mode="direction")
+    cols = _fx_colors(s, 10, t)
+    expect = [_BLACK] * 10
+    expect[0], expect[9], expect[r] = R, B, W
+    assert cols == [_approx(c) for c in expect]
+
+
+def test_direction_run_sec():
+    s = _st(mode="direction", run_sec=1.0)
+    cols = _fx_colors(s, 10, 0.5625)               # frac(0.5625)·8 = 4.5 → ячейка 5
+    assert cols[5] == _approx(W) and cols[4] == _approx(_BLACK)
+
+
+def test_direction_independent_of_content():
+    s = _st(mode="direction", level=1.0)
+    assert _col(s, _row(n=10), cell=0, content=(0.0, 1.0, 1.0)) == _approx((1.0, 0.0, 0.0))
+    assert _col(s, _row(n=10), cell=4, t=0.125, content=(1.0, 1.0, 1.0)) == _approx(_BLACK)
+
+
+_NAMED = {"red": (1, 0, 0), "green": (0, 1, 0), "blue": (0, 0, 1), "white": (1, 1, 1),
+          "dim": (0.1, 0.1, 0.1), "off": (0, 0, 0)}
+
+
+@pytest.mark.parametrize("number,n,names", [
+    (1, 4, ["blue", "off", "off", "off"]),
+    (12, 6, ["green", "off", "blue", "blue", "off", "off"]),
+    (105, 10, ["red", "off", "dim", "off", "blue", "blue", "blue", "blue", "blue", "off"]),
+    (1000, 8, ["white", "off", "dim", "off", "dim", "off", "dim", "off"]),
+])
+def test_number_mode(number, n, names):
+    assert dsm_locate.number_layout(number, n)[0] == names       # эталон раскладки 2.2
+    for level in (0.3, 1.0):
+        s = _st(mode="number", level=level)
+        for t in (0.1, 0.35):
+            got = [_col(s, _row(n=n, number=number), cell=c, t=t) for c in range(n)]
+            assert got == [_approx(_scale(_NAMED[x], level)) for x in names]
+
+
+@pytest.mark.parametrize("uni,ch,n,names", [
+    (1, 5, 10, ["blue", "off", "off", "blue", "blue", "blue", "blue", "blue", "off", "off"]),
+    (0, 1, 5, ["dim", "off", "off", "blue", "off"]),
+    (12, 30, 10, ["green", "off", "blue", "blue", "off", "off", "green", "green", "green", "off"]),
+])
+def test_address_mode(uni, ch, n, names):
+    assert dsm_locate.address_layout(uni, ch, n)[0] == names
+    s = _st(mode="address")
+    got = [_col(s, _row(n=n, uni=uni, ch=ch), cell=c) for c in range(n)]
+    assert got == [_approx(_scale(_NAMED[x], 0.3)) for x in names]
+
+
+@pytest.mark.parametrize("others", ["solo", "dim", "over"])
+def test_fill_all_output_fixtures(others):
+    s = dsm_locate.LocateState(pattern="fill", test_color=(1.0, 0.5, 0.0), others=others)
+    for target in (0, 1):
+        for t in (0.1, 2.7):
+            assert _col(s, _row(target=target), cell=3, t=t) == _approx((0.3, 0.15, 0.0))
+
+
+def test_pattern_overrides_target_mode():
+    s = _st(mode="direction", pattern="fill", level=1.0)
+    assert _col(s, _row(target=1), cell=5, t=0.125) == _approx((1.0, 1.0, 1.0))
+
+
+@pytest.mark.parametrize("t,c", [(0.5, (1, 0, 0)), (1.5, (0, 1, 0)), (2.5, (0, 0, 1)), (3.5, (1, 1, 1)),
+                                 (4.5, (1, 0, 0))])
+def test_rgbw_phases(t, c):
+    for level in (0.3, 1.0):
+        s = dsm_locate.LocateState(pattern="rgbw", level=level)
+        for target in (0, 1):
+            assert _col(s, _row(target=target), cell=1, t=t) == _approx(_scale(c, level))
+
+
+def _chase_rows():
+    return [_row(fx=0, target=0, n=4, offset=0), _row(fx=1, target=0, n=0, offset=4),
+            _row(fx=2, target=0, n=3, offset=4)]
+
+
+def _chase_frame(t, state=None):
+    state = state or dsm_locate.LocateState(pattern="chase")
+    rows = _chase_rows()
+    total, nfx = dsm_locate.fixture_totals(rows)
+    return [_col(state, r, cell=c, t=t, total=total, nfx=nfx) for r in rows for c in range(r.ncells)]
+
+
+# период = run_sec × nfx = 4 с на 7 ячеек; моменты — середины шагов: t = (p + 0.5) / 7 × 4
+@pytest.mark.parametrize("t,lit", [(0.5 / 7 * 4, 0), (3.5 / 7 * 4, 3), (4.5 / 7 * 4, 4), (6.5 / 7 * 4, 6),
+                                   (4.0 + 0.5 / 7 * 4, 0)])
+def test_chase_position(t, lit):
+    frame = _chase_frame(t)
+    expect = [_BLACK] * 7
+    expect[lit] = (0.3, 0.3, 0.3)
+    assert frame == [_approx(c) for c in expect]
+
+
+def test_chase_moves_to_next_fixture():
+    rows = _chase_rows()
+    s = dsm_locate.LocateState(pattern="chase", level=1.0)
+    total, nfx = dsm_locate.fixture_totals(rows)
+    t1, t2 = 3.5 / 7 * 4, 4.5 / 7 * 4
+    assert _col(s, rows[0], cell=3, t=t1, total=total, nfx=nfx) == _approx((1.0, 1.0, 1.0))
+    assert _col(s, rows[2], cell=0, t=t1, total=total, nfx=nfx) == _approx(_BLACK)
+    assert _col(s, rows[0], cell=3, t=t2, total=total, nfx=nfx) == _approx(_BLACK)
+    assert _col(s, rows[2], cell=0, t=t2, total=total, nfx=nfx) == _approx((1.0, 1.0, 1.0))
+
+
+def test_chase_independent_of_content():
+    s = dsm_locate.LocateState(pattern="chase")
+    assert _col(s, _row(n=4, target=0), cell=1, t=0.1, total=4, nfx=1, content=(1, 1, 1)) == _approx(_BLACK)
+
+
+def test_fixture_totals():
+    assert dsm_locate.fixture_totals(_chase_rows()) == (7, 2)
+    assert dsm_locate.fixture_totals([]) == (0, 0)
+
+
+def test_fixture_totals_from_rig(rig):
+    p, issues = rig
+    rows = dsm_locate.fixture_rows(p, api.segments_by_fixture(p), None, issues)
+    total, nfx = dsm_locate.fixture_totals(rows)
+    assert nfx == sum(1 for r in rows if r.ncells > 0)
+    assert total == sum(r.ncells for r in rows)
+    last = [r for r in rows if r.ncells > 0][-1]
+    assert total == last.offset + last.ncells
+
+
+def test_expected_color_floats_in_range():
+    for mode, smooth in ALL_MODES:
+        s = _st(mode=mode, smooth=smooth, level=1.0)
+        for t in [k * 0.0625 for k in range(64)]:
+            for c in range(10):
+                col = _col(s, _row(n=10, number=105, uni=12, ch=30), cell=c, t=t)
+                assert all(isinstance(x, float) and 0.0 <= x <= 1.0 for x in col)
+                assert not any(math.isnan(x) for x in col)
+
+
+
+def test_pattern_on_fixture_without_cells_is_content():
+    """Строка без ячеек в геометрии (не выводится) — паттерн её не трогает."""
+    s = dsm_locate.LocateState(pattern="fill")
+    row = dsm_locate.FxRow(fx=3, target=0, number=4, uni=0, ch=0, ncells=0, offset=0)
+    assert dsm_locate.expected_color(s, row, 0, True, (0.4, 0.5, 0.6), 0.1, 10, 1) == (0.4, 0.5, 0.6)
+
+
+@pytest.mark.parametrize("field,value", [("mode", "strobe"), ("others", "half"), ("pattern", "plasma")])
+def test_unknown_mode_others_pattern_raise(field, value):
+    base = {"target": Target(spec="fx1", fixtures=(0,)), field: value}
+    if field == "pattern":
+        base["target"] = None
+    s = dsm_locate.LocateState(**base)
+    row = dsm_locate.FxRow(fx=0, target=1 if field == "mode" else 0, number=1, uni=0, ch=1, ncells=5, offset=0)
+    with pytest.raises(ValueError):
+        dsm_locate.expected_color(s, row, 0, True, (0.4, 0.5, 0.6), 0.1, 5, 1)
+
+
+def test_blink_smooth_stable_for_large_time():
+    """Плавное мигание через frac(t·hz): при t = 36000 с (10 ч) фаза та же, что при t = 0.125."""
+    s = dsm_locate.LocateState(target=Target(spec="fx1", fixtures=(0,)), smooth=True, level=1.0)
+    row = dsm_locate.FxRow(fx=0, target=1, number=1, uni=0, ch=1, ncells=5, offset=0)
+    a = dsm_locate.expected_color(s, row, 0, True, (0, 0, 0), 0.125, 5, 1)
+    b = dsm_locate.expected_color(s, row, 0, True, (0, 0, 0), 36000.125, 5, 1)
+    assert a == pytest.approx(b, abs=1e-9)

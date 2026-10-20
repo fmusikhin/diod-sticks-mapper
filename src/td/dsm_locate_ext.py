@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import traceback
 
 NOT_YET = "не реализовано"
@@ -19,11 +20,7 @@ class DsmLocateExt:
     def __init__(self, ownerComp) -> None:
         self.ownerComp = ownerComp
         self.logic = ownerComp.op("locate_mod").module      # dsm_locate из синхронизированного DAT
-        self.message: str = ""
-        self.target = None          # Target | None — Locate выключен при старте (9.4)
-        self.mode: str = "blink"
-        self.pattern: str = "off"
-        self.raw = None
+        self.state = self.logic.LocateState()   # Locate выключен при старте (9.4); dataclass из dsm_locate
         self._in_par = False        # защита от повторного входа: метод меняет пару → пара вызывает метод
         eng = ownerComp.ext.DsmEngineExt
         eng.AddListener(self.OnPatchLoaded)
@@ -34,8 +31,7 @@ class DsmLocateExt:
         return self._not_yet("Locate")
 
     def Clear(self) -> None:
-        self.target, self.pattern = None, "off"
-        self.message = ""
+        self._set(target=None, pattern="off", message="")
         self._engine().WriteInfo()
 
     def Next(self) -> None:
@@ -69,7 +65,7 @@ class DsmLocateExt:
     # ------------------------------------------------------------------ события
     def OnPatchLoaded(self, patch, issues) -> None:
         """Слушатель движка: в каркасе Locate после загрузки выключен (цель сохраняется — задача 4.2)."""
-        self.target, self.pattern = None, "off"
+        self._set(target=None, pattern="off")
 
     def OnLocatePar(self, par) -> None:
         """Исполнитель пар страницы Locate (parexecuteDAT) → методы; повторный вход из метода игнорируется."""
@@ -102,7 +98,7 @@ class DsmLocateExt:
             # Mode, Others, Level, Dim, Blinkhz, Blinksmooth, Runsec, Testcolor — униформы (задачи 3.x, 4.1)
         except Exception:  # команда пары — в textport и info, компонент работает дальше
             print(traceback.format_exc())
-            self.message = "ошибка команды Locate: см. textport"
+            self._set(message="ошибка команды Locate: см. textport")
             self._engine().WriteInfo()
         finally:
             self._in_par = False
@@ -112,11 +108,17 @@ class DsmLocateExt:
         return self.ownerComp.ext.DsmEngineExt
 
     def _not_yet(self, name: str) -> bool:
-        self.message = f"{name}: {NOT_YET}"
+        self._set(message=f"{name}: {NOT_YET}")
         self._engine().WriteInfo()
         return False
 
     def _info_rows(self) -> list[list[str]]:
-        tgt = self.target.spec if self.target is not None else "off"
-        return [["locate_target", tgt], ["locate_mode", self.mode], ["locate_pattern", self.pattern],
-                ["locate_raw", "off" if self.raw is None else str(self.raw)], ["locate_message", self.message]]
+        s = self.state
+        tgt = s.target.spec if s.target is not None else "off"
+        return [["locate_target", tgt], ["locate_mode", s.mode], ["locate_others", s.others],
+                ["locate_pattern", s.pattern], ["locate_raw", "off" if s.raw is None else "on"],
+                ["locate_message", s.message]]
+
+    def _set(self, **changes) -> None:
+        """Новое состояние Locate (frozen dataclass) — только через замену."""
+        self.state = dataclasses.replace(self.state, **changes)
