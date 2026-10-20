@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from dsm_core.addressing import Segment, segments_by_fixture
+from dsm_core.cells import cell_order
 from dsm_core.model import Acceptance, Patch
 from dsm_core.validate_types import Issue, IssueLevel
 
@@ -153,6 +154,88 @@ def walk_order(patch: Patch, issues: list[Issue], only_unchecked: bool) -> list[
     bad = not_output_reasons(patch, issues)
     return [k for k, f in enumerate(patch.fixtures)
             if k not in bad and (not only_unchecked or f.acceptance == Acceptance.NONE)]
+
+
+@dataclass(frozen=True)
+class FxRow:
+    """Строка ``tables/locate_fx``, одна на фикстуру патча (колонки ``FX_COLUMNS``)."""
+    fx: int          # индекс в patch.fixtures
+    target: int      # 1 — фикстура в цели
+    number: int      # порядковый номер в патче, с 1
+    uni: int         # юниверс начала (первый сегмент), 0 у не выводимых
+    ch: int          # первый канал начала, 0 у не выводимых
+    ncells: int      # ячеек в геометрии движка (по порядку данных), 0 у не выводимых
+    offset: int      # сумма ncells предыдущих фикстур
+
+    def as_row(self) -> list[str]:
+        return [str(getattr(self, c)) for c in FX_COLUMNS]
+
+
+def fixture_rows(patch: Patch, segments: dict[str, list[Segment]], target: Target | None,
+                 issues: list[Issue] | tuple = ()) -> list[FxRow]:
+    """Строка на каждую фикстуру патча, в порядке ``patch.fixtures``.
+
+    ``ncells`` = ``len(cell_order(ft, fx))`` — столько точек движок кладёт в ``geo_cells`` на фикстуру; не выводимые
+    (правило ``not_output_reasons`` по ``issues``) — с нулями адреса и ячеек.
+    """
+    bad = not_output_reasons(patch, list(issues), segments)
+    chosen = set(target.fixtures) if target is not None else set()
+    types = {t.id: t for t in patch.fixture_types}
+    rows: list[FxRow] = []
+    offset = 0
+    for k, fx in enumerate(patch.fixtures):
+        if k in bad:
+            uni = ch = n = 0
+        else:
+            first = segments[fx.id][0]
+            uni, ch, n = first.universe, first.first_channel, len(cell_order(types[fx.type_id], fx))
+        rows.append(FxRow(fx=k, target=1 if k in chosen else 0, number=k + 1, uni=uni, ch=ch, ncells=n, offset=offset))
+        offset += n
+    return rows
+
+
+_DIGIT_COLORS = ("blue", "green", "red")      # единицы, десятки, сотни; тысячи и выше — white
+
+
+def _digit_groups(value: int) -> list[list[str]]:
+    """Группы ячеек разрядов со старшего: цифра d — d ячеек цвета разряда, 0 — одна ``dim``."""
+    if value < 0:
+        raise ValueError(f"отрицательное число не показывается: {value}")
+    digits = str(value)
+    groups = []
+    for k, d in enumerate(digits):
+        pos = len(digits) - 1 - k
+        color = _DIGIT_COLORS[pos] if pos < len(_DIGIT_COLORS) else "white"
+        groups.append(["dim"] if d == "0" else [color] * int(d))
+    return groups
+
+
+def _place(parts: list[tuple[int, list[str]]], ncells: int) -> tuple[list[str], bool]:
+    """Группы с числом погашенных ячеек перед каждой; целые группы, пока помещаются, хвост — ``off``."""
+    cells: list[str] = []
+    fits = True
+    for gap, group in parts:
+        piece = ["off"] * (gap if cells else 0) + group
+        if len(cells) + len(piece) > ncells:
+            fits = False
+            break
+        cells += piece
+    return cells + ["off"] * (ncells - len(cells)), fits
+
+
+def number_layout(number: int, ncells: int) -> tuple[list[str], bool]:
+    """Цвета ячеек от начала фикстуры (по порядку данных) для числа и признак «помещается».
+
+    Разряды со старшего, между ними одна ``off``; не помещается — столько целых старших разрядов, сколько влезает.
+    """
+    return _place([(1, g) for g in _digit_groups(number)], ncells)
+
+
+def address_layout(universe: int, channel: int, ncells: int) -> tuple[list[str], bool]:
+    """Юниверс тем же способом, две ``off``, затем канал; правила помещения как у ``number_layout``."""
+    uni = [(1, g) for g in _digit_groups(universe)]
+    ch = [(2 if k == 0 else 1, g) for k, g in enumerate(_digit_groups(channel))]
+    return _place(uni + ch, ncells)
 
 
 def step(order: list[int], current: int | None, delta: int, loop: bool) -> int | None:

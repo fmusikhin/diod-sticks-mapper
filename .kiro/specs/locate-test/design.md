@@ -198,7 +198,7 @@ graph TB
 | 2.1–2.5 | мигание, соло / приглушить / поверх | `locate.glsl`, униформы `uMode`, `uOthers`, `uDim`, `uBlinkHz`, `uSmooth` | `locate_fx.target` | |
 | 2.6 | не трогать отключённые и head/tail | `locate.glsl` (`active == 0` — без изменений), служебные каналы мимо `hook` | | |
 | 3.1–3.4 | направление, бег, короткие фикстуры | `locate.glsl` по `cell` и `locate_fx.ncells`, `uRunSec` | | |
-| 4.1–4.4 | номер и адрес на пикселях | `dsm_locate.fixture_rows` (`number`, `uni`, `ch`), `locate.glsl` раскладка, `dsm_locate.number_fits` | `info.locate_message` | |
+| 4.1–4.4 | номер и адрес на пикселях | `dsm_locate.fixture_rows` (`number`, `uni`, `ch`), `locate.glsl` раскладка, второй элемент `number_layout` | `info.locate_message` | |
 | 5.1–5.5 | обход и автошаг | `dsm_locate.walk_order`, `step`; `DsmLocateExt.Next/Prev`, `locate_timer` | `Next()`, `Prev()`, пары `Walk*` | |
 | 6.1–6.4 | тест-паттерны | `locate.glsl` режимы `fill`, `rgbw`, `chase`; цель = все выводимые | пара `Testpattern` | |
 | 7.1–7.6 | сырой адрес | `dsm_locate.raw_rows`, `output/raw`, `DsmLocateExt.Raw/RawClear` | `Raw(...)`, пары `Raw*` | |
@@ -269,8 +269,9 @@ def step(order: list[int], current: int | None, delta: Literal[1, -1], loop: boo
 class FxRow:                       # строка tables/locate_fx, одна на фикстуру патча
     fx: int; target: int; number: int; uni: int; ch: int; ncells: int; offset: int
 
-def fixture_rows(patch: Patch, segments: dict[str, list[Segment]], target: Target | None) -> list[FxRow]: ...
+def fixture_rows(patch: Patch, segments: dict[str, list[Segment]], target: Target | None, issues: list[Issue] = ()) -> list[FxRow]: ...
 def number_layout(number: int, ncells: int) -> tuple[list[str], bool]: ...   # цвета ячеек от начала, помещается ли
+def address_layout(universe: int, channel: int, ncells: int) -> tuple[list[str], bool]: ...  # юниверс, две off, канал
 def raw_rows(patch: Patch, output_id: str, universe: int, first: int, last: int, value: int) -> RawRows: ...  # RawError при ошибке
 def sheet_rows(patch: Patch, segments: dict[str, list[Segment]]) -> list[list[str]]: ...  # заголовок + строка на фикстуру
 def sheet_summary(patch: Patch) -> dict[str, int]: ...
