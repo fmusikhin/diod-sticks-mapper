@@ -10,7 +10,9 @@ from dataclasses import dataclass
 
 from dsm_core.addressing import Segment, segments_by_fixture
 from dsm_core.cells import cell_order
-from dsm_core.model import Acceptance, Patch
+from dsm_core.csv_io import CsvDialect, rows_to_csv
+from dsm_core.model import Acceptance, Patch, TargetKind, effective_target_ip
+from dsm_core.protocol import DMX_CHANNELS, Protocol, sacn_multicast, universe_in_range, universe_range
 from dsm_core.validate_types import Issue, IssueLevel
 
 # колонки таблицы tables/locate_fx — строка на фикстуру патча (design: «tables/locate_fx»)
@@ -236,6 +238,104 @@ def address_layout(universe: int, channel: int, ncells: int) -> tuple[list[str],
     uni = [(1, g) for g in _digit_groups(universe)]
     ch = [(2 if k == 0 else 1, g) for k, g in enumerate(_digit_groups(channel))]
     return _place(uni + ch, ncells)
+
+
+# ---------- сырой адрес (tables/locate_raw → output/raw) ----------
+
+RAW_PTS_COLUMNS = ["P(0)", "P(1)", "P(2)", "Color(0)", "Color(1)", "Color(2)", "Color(3)"]
+RAW_PRIM_COLUMNS = ["vertices", "DMXFixtureUniverse", "DMXFixtureChannel", "DMXFixtureNetAddress(0)",
+                    "DMXFixtureNetAddress(1)", "DMXFixtureNetAddress(2)", "DMXFixtureNetAddress(3)"]
+BROADCAST_IP = "255.255.255.255"      # как dsm_geometry.BROADCAST_IP
+
+
+@dataclass(frozen=True)
+class RawRows:
+    """Строки ``tables/locate_raw``: 512 точек (канал k — точка k−1) и один line strip через них с адресом выхода."""
+    pts_rows: list[list[str]]
+    prims_rows: list[list[str]]
+    warning: str = ""                 # юниверс не занят фикстурами этого выхода — шлётся всё равно (7.3)
+
+
+class RawError(ValueError):
+    """Сырой адрес отклонён: ``reason`` — причина по-русски (7.4)."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _is_int(x) -> bool:
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
+def raw_target_ip(out, universe: int) -> str:
+    """Цель юниверса выхода — то же правило, что у движка (``dsm_geometry._target_ip`` по ``routing_table`` ядра):
+    broadcast без IP — 255.255.255.255; sACN multicast без IP — группа 239.255.hi.lo; иначе IP выхода или 127.0.0.1."""
+    if out.target_kind == TargetKind.BROADCAST and not out.ip:
+        return BROADCAST_IP
+    if out.protocol == Protocol.SACN and out.target_kind == TargetKind.MULTICAST and not out.ip:
+        return sacn_multicast(universe)
+    return effective_target_ip(out)
+
+
+def raw_rows(patch: Patch, output_id: str, universe: int, first: int, last: int, value: int) -> RawRows:
+    """Строки сырой фикстуры: ``value`` на каналах ``first..last`` юниверса ``universe`` выхода ``output_id``,
+    0 на остальных. Адрес — только цель выхода патча (7.5). Ошибка → ``RawError``, ничего не возвращается."""
+    out = next((o for o in patch.outputs if o.id == output_id), None)
+    if out is None:
+        raise RawError(f"нет такого выхода: {output_id!r}")
+    if not _is_int(universe) or universe < 0:
+        raise RawError(f"юниверс — целое ≥ 0: {universe!r}")
+    if not universe_in_range(out.protocol, universe):
+        lo, hi = universe_range(out.protocol)
+        raise RawError(f"юниверс {universe} вне диапазона {out.protocol.value} {lo}–{hi}")
+    if not (_is_int(first) and _is_int(last)) or not 1 <= first <= last <= DMX_CHANNELS:
+        raise RawError(f"каналы — целые 1 ≤ первый ≤ последний ≤ {DMX_CHANNELS}: {first!r}–{last!r}")
+    if not _is_int(value) or not 0 <= value <= 255:
+        raise RawError(f"значение — целое 0–255: {value!r}")
+
+    on = repr(value / 255.0)              # без округления: value/255 → байт value точно
+    pts: list[list[str]] = [RAW_PTS_COLUMNS[:]]
+    for k in range(DMX_CHANNELS):
+        pts.append([str(k), "0", "0", on if first <= k + 1 <= last else "0", "0", "0", "0"])
+    octets = raw_target_ip(out, universe).split(".")
+    prims = [RAW_PRIM_COLUMNS[:], [" ".join(str(k) for k in range(DMX_CHANNELS)), str(universe), "1", *octets]]
+
+    segs = segments_by_fixture(patch)
+    used = any(sg.universe == universe for fx in patch.fixtures if fx.address.output_id == out.id
+               for sg in segs.get(fx.id, []))
+    warning = "" if used else f"юниверс {universe} не занят патчем на выходе {out.id}: шлётся по цели выхода"
+    return RawRows(pts_rows=pts, prims_rows=prims, warning=warning)
+
+
+# ---------- лист приёмки (tables/locate_sheet, CSV) ----------
+
+SHEET_COLUMNS = ["n", "id", "name", "output", "universe", "channel", "status"]
+SHEET_DIALECT = CsvDialect(";", ".")      # «;» без замены точки: имена вида «1.5» не портятся
+
+
+def sheet_rows(patch: Patch, segments: dict[str, list[Segment]]) -> list[list[str]]:
+    """Заголовок + строка на фикстуру в порядке патча; юниверс и канал — первого сегмента (пусто без адреса)."""
+    rows = [SHEET_COLUMNS[:]]
+    for k, fx in enumerate(patch.fixtures):
+        segs = segments.get(fx.id) or []
+        uni, ch = (str(segs[0].universe), str(segs[0].first_channel)) if segs else ("", "")
+        rows.append([str(k + 1), fx.id, fx.name, fx.address.output_id or "", uni, ch, fx.acceptance.value])
+    return rows
+
+
+def sheet_summary(patch: Patch) -> dict[str, int]:
+    """Число фикстур по каждому статусу приёмки (все статусы, с нулями) и ``unchecked`` — со статусом ``none``."""
+    res = {a.value: 0 for a in Acceptance}
+    for fx in patch.fixtures:
+        res[fx.acceptance.value] += 1
+    res["unchecked"] = res[Acceptance.NONE.value]
+    return res
+
+
+def sheet_csv(rows: list[list[str]]) -> str:
+    """CSV листа приёмки: разделитель ``;``, строка для записи в UTF-8 — писатель ядра ``rows_to_csv``."""
+    return rows_to_csv(rows, SHEET_DIALECT)
 
 
 def step(order: list[int], current: int | None, delta: int, loop: bool) -> int | None:

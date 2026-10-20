@@ -556,3 +556,257 @@ def test_address_layout_does_not_fit():
     assert cells == _pad(_lay("G1 . B2 . . R4"), 13)
     cells, fits = dsm_locate.address_layout(12, 433, 3)
     assert fits is False and cells == _lay("G1 . .")
+
+
+# --- 2.3: сырой адрес (7.1, 7.3, 7.4, 7.5) --------------------------------------------------
+
+import csv as _csv
+import inspect as _inspect
+import io as _io
+import pathlib as _pathlib
+
+from dsm_core.model import TargetKind
+from dsm_core.protocol import Protocol
+
+import dsm_geometry
+
+_ROOT = _pathlib.Path(__file__).resolve().parents[1]
+_PTS_COLUMNS = ["P(0)", "P(1)", "P(2)", "Color(0)", "Color(1)", "Color(2)", "Color(3)"]
+_RAW_PRIM_COLUMNS = ["vertices", "DMXFixtureUniverse", "DMXFixtureChannel", "DMXFixtureNetAddress(0)",
+                     "DMXFixtureNetAddress(1)", "DMXFixtureNetAddress(2)", "DMXFixtureNetAddress(3)"]
+
+
+def _targets_patch():
+    """Выходы на все виды цели: Art-Net unicast без IP и с IP, broadcast без IP и с IP, sACN multicast без IP,
+    sACN unicast с IP. По одной фикстуре на выход."""
+    specs = [("u_none", Protocol.ARTNET, TargetKind.UNICAST, None, 0),
+             ("u_ip", Protocol.ARTNET, TargetKind.UNICAST, "192.0.2.10", 3),
+             ("b_none", Protocol.ARTNET, TargetKind.BROADCAST, None, 300),
+             ("b_ip", Protocol.ARTNET, TargetKind.BROADCAST, "192.0.2.255", 7),
+             ("m_none", Protocol.SACN, TargetKind.MULTICAST, None, 1),
+             ("s_ip", Protocol.SACN, TargetKind.UNICAST, "192.0.2.20", 600)]
+    outs = [output(oid, protocol=pr, start=start, ip=ip, target_kind=tk, fixture_ids=(f"fx_{oid}",))
+            for oid, pr, tk, ip, start in specs]
+    fxs = [fixture(f"fx_{oid}", output_id=oid, x=float(k * 10)) for k, (oid, *_r) in enumerate(specs)]
+    p = make_patch([rgb_type()], fxs, outs)
+    p, _ = api.auto_assign_all(p)
+    return p
+
+
+def test_raw_rows_shape_and_values(rig):
+    p, _ = rig
+    r = dsm_locate.raw_rows(p, "out1", 0, 10, 20, 128)
+    assert isinstance(r, dsm_locate.RawRows)
+    assert r.pts_rows[0] == _PTS_COLUMNS
+    assert len(r.pts_rows) == 1 + 512
+    for k, row in enumerate(r.pts_rows[1:]):
+        ch = k + 1
+        assert len(row) == len(_PTS_COLUMNS)
+        assert float(row[0]) == k and float(row[1]) == 0 and float(row[2]) == 0
+        assert float(row[3]) == pytest.approx(128 / 255 if 10 <= ch <= 20 else 0.0)
+        assert [float(v) for v in row[4:]] == [0.0, 0.0, 0.0]
+    assert r.prims_rows[0] == _RAW_PRIM_COLUMNS
+    assert len(r.prims_rows) == 2
+    prim = r.prims_rows[1]
+    assert prim[0].split() == [str(k) for k in range(512)]
+    assert prim[1] == "0" and prim[2] == "1"
+    assert prim[3:] == ["127", "0", "0", "1"]          # unicast без IP — 127.0.0.1
+
+
+@pytest.mark.parametrize("first,last,value", [(1, 512, 255), (1, 1, 0), (512, 512, 255), (7, 7, 1)])
+def test_raw_rows_bounds_accepted(rig, first, last, value):
+    r = dsm_locate.raw_rows(rig[0], "out1", 0, first, last, value)
+    on = [k + 1 for k, row in enumerate(r.pts_rows[1:]) if float(row[3]) > 0]
+    assert on == ([] if value == 0 else list(range(first, last + 1)))
+    assert all(float(row[3]) == pytest.approx(value / 255) for row in r.pts_rows[first:last + 1])
+
+
+@pytest.mark.parametrize("out_id,universe,first,last,value,word", [
+    ("out1", 0, 0, 10, 255, "канал"), ("out1", 0, 1, 513, 255, "канал"), ("out1", 0, 20, 10, 255, "канал"),
+    ("out1", 0, -1, 10, 255, "канал"), ("out1", 0, 1, 10, -1, "значение"), ("out1", 0, 1, 10, 256, "значение"),
+    ("nope", 0, 1, 10, 255, "выход"), ("", 0, 1, 10, 255, "выход"), ("out1", -1, 1, 10, 255, "юниверс")])
+def test_raw_rows_rejects(rig, out_id, universe, first, last, value, word):
+    with pytest.raises(dsm_locate.RawError) as e:
+        dsm_locate.raw_rows(rig[0], out_id, universe, first, last, value)
+    assert isinstance(e.value, ValueError)
+    assert e.value.reason and word in e.value.reason
+
+
+@pytest.mark.parametrize("bad", [1.5, "3", None, True])
+def test_raw_rows_rejects_non_int(rig, bad):
+    for args in ((bad, 1, 10, 255), (0, bad, 10, 255), (0, 1, bad, 255), (0, 1, 10, bad)):
+        with pytest.raises(dsm_locate.RawError):
+            dsm_locate.raw_rows(rig[0], "out1", *args)
+
+
+def test_raw_rows_sacn_universe_out_of_protocol_range():
+    p = _targets_patch()
+    with pytest.raises(dsm_locate.RawError) as e:
+        dsm_locate.raw_rows(p, "m_none", 0, 1, 512, 255)          # sACN: юниверс 1–63999
+    assert "юниверс" in e.value.reason
+
+
+def _out_unis(p, out_id):
+    segs = api.segments_by_fixture(p)
+    return {sg.universe for f in p.fixtures if f.address.output_id == out_id for sg in segs[f.id]}
+
+
+def test_raw_rows_universe_not_in_patch_warns(rig):
+    p, _ = rig
+    free = max(_out_unis(p, "out1")) + 50
+    r = dsm_locate.raw_rows(p, "out1", free, 1, 512, 255)
+    assert r.warning and "не занят" in r.warning and str(free) in r.warning
+    assert r.prims_rows[1][1] == str(free)           # шлётся всё равно, по цели выхода (7.3)
+    assert dsm_locate.raw_rows(p, "out4", 60, 1, 512, 255).warning      # выход без фикстур
+
+
+def test_raw_rows_universe_of_other_output_still_warns(rig):
+    p, _ = rig
+    u_out2 = api.segments_by_fixture(p)["fx9"][0].universe
+    assert u_out2 not in _out_unis(p, "out1")
+    assert dsm_locate.raw_rows(p, "out1", u_out2, 1, 512, 255).warning
+    assert dsm_locate.raw_rows(p, "out2", u_out2, 1, 512, 255).warning == ""
+
+
+def test_raw_rows_occupied_universe_no_warning(rig):
+    p, _ = rig
+    segs = api.segments_by_fixture(p)
+    for f in p.fixtures:
+        for sg in segs[f.id]:
+            assert dsm_locate.raw_rows(p, f.address.output_id, sg.universe, 1, 512, 255).warning == ""
+
+
+@pytest.mark.parametrize("out_id,expect_ip", [
+    ("u_none", "127.0.0.1"), ("u_ip", "192.0.2.10"), ("b_none", "255.255.255.255"), ("b_ip", "192.0.2.255"),
+    ("s_ip", "192.0.2.20")])
+def test_raw_rows_target_ip_from_output_only(out_id, expect_ip):
+    p = _targets_patch()
+    for u in (300, 900, 5):                           # и вне патча — цель выхода (7.3, 7.5)
+        prim = dsm_locate.raw_rows(p, out_id, u, 1, 512, 255).prims_rows[1]
+        assert ".".join(prim[3:]) == expect_ip
+
+
+def test_raw_rows_sacn_multicast_group():
+    p = _targets_patch()
+    prim = dsm_locate.raw_rows(p, "m_none", 0x0102, 1, 512, 255).prims_rows[1]
+    assert prim[1] == str(0x0102) and ".".join(prim[3:]) == "239.255.1.2"
+
+
+def test_raw_rows_has_no_ip_argument():
+    assert list(_inspect.signature(dsm_locate.raw_rows).parameters) == [
+        "patch", "output_id", "universe", "first", "last", "value"]
+
+
+def _engine_prims(p):
+    t = dsm_geometry.build_tables(p, api.validate(p), api.segments_by_fixture(p), api.routing_table(p), 60.0)
+    cols = t.prims_rows[0]
+    fi, ui, ai = cols.index("fx"), cols.index("DMXFixtureUniverse"), cols.index("DMXFixtureNetAddress(0)")
+    return [(p.fixtures[int(r[fi])].address.output_id, r[ui], r[ai:ai + 4])
+            for r in t.prims_rows[1:] + t.raw_prims_rows[1:]]
+
+
+def _assert_raw_matches_engine(p):
+    prims = _engine_prims(p)
+    assert prims
+    for out_id, uni, addr in prims:
+        r = dsm_locate.raw_rows(p, out_id, int(uni), 1, 512, 255)
+        assert r.warning == ""
+        assert r.prims_rows[1][1] == uni
+        assert r.prims_rows[1][3:7] == addr, (out_id, uni)
+
+
+@pytest.mark.parametrize("path", sorted((_ROOT / "examples").glob("*.json")), ids=lambda q: q.stem)
+def test_raw_rows_encoding_matches_engine_examples(path):
+    _assert_raw_matches_engine(api.load(path)[0])
+
+
+def test_raw_rows_encoding_matches_engine_rig(rig):
+    _assert_raw_matches_engine(rig[0])
+
+
+def test_raw_rows_encoding_matches_engine_all_target_kinds():
+    _assert_raw_matches_engine(_targets_patch())
+
+
+def test_locate_does_not_import_geometry():
+    src = (_ROOT / "src" / "td" / "dsm_locate.py").read_text(encoding="utf-8")
+    assert "import dsm_geometry" not in src and "from dsm_geometry" not in src
+
+
+# --- 2.3: лист приёмки (8.3, 8.4) ------------------------------------------------------------
+
+_SHEET_HEADER = ["n", "id", "name", "output", "universe", "channel", "status"]
+
+
+def _rig_with_statuses():
+    p, _ = _rig()
+    for fid, st in [("fx1", Acceptance.OK), ("fx2", Acceptance.OK), ("fx3", Acceptance.REVERSED),
+                    ("fx5", Acceptance.DEAD), ("fx7", Acceptance.MISPLACED), ("fx9", Acceptance.WRONG_ADDRESS)]:
+        p = api.set_acceptance(p, fid, st)
+    return p
+
+
+def test_sheet_rows_rig():
+    p = _rig_with_statuses()
+    segs = api.segments_by_fixture(p)
+    rows = dsm_locate.sheet_rows(p, segs)
+    assert rows[0] == _SHEET_HEADER
+    assert len(rows) == 1 + len(p.fixtures)
+    for k, (f, row) in enumerate(zip(p.fixtures, rows[1:])):
+        assert all(isinstance(c, str) for c in row)
+        first = segs[f.id][0] if segs[f.id] else None
+        assert row == [str(k + 1), f.id, f.name, f.address.output_id or "",
+                       str(first.universe) if first else "", str(first.first_channel) if first else "",
+                       f.acceptance.value]
+    by_id = {r[1]: r for r in rows[1:]}
+    assert by_id["fx3"][2] == "Стик, 3" and by_id["fx3"][6] == "reversed"
+    assert by_id["fx10"][3:6] == ["", "", ""] and by_id["fx10"][6] == "none"
+    assert by_id["fx9"][6] == "wrong_address" and by_id["fx4"][6] == "none"
+    assert by_id["fx1"][4:6] == [str(segs["fx1"][0].universe), "1"]
+
+
+def test_sheet_summary_rig():
+    s = dsm_locate.sheet_summary(_rig_with_statuses())
+    assert s == {"none": 6, "ok": 2, "reversed": 1, "dead": 1, "misplaced": 1, "wrong_address": 1, "unchecked": 6}
+
+
+def test_sheet_summary_all_keys_with_zeros():
+    p, _ = _rig()
+    s = dsm_locate.sheet_summary(p)
+    assert set(s) == {a.value for a in Acceptance} | {"unchecked"}
+    assert s["none"] == s["unchecked"] == len(p.fixtures)
+    assert all(s[a.value] == 0 for a in Acceptance if a != Acceptance.NONE)
+    empty = make_patch([rgb_type()], [], [output()])
+    assert dsm_locate.sheet_summary(empty) == {**{a.value: 0 for a in Acceptance}, "unchecked": 0}
+
+
+def _read_back(text):
+    return list(_csv.reader(_io.StringIO(text), delimiter=";"))
+
+
+def test_sheet_csv_round_trip_rig():
+    p = _rig_with_statuses()
+    rows = dsm_locate.sheet_rows(p, api.segments_by_fixture(p))
+    text = dsm_locate.sheet_csv(rows)
+    assert isinstance(text, str)
+    assert text.splitlines()[0] == ";".join(_SHEET_HEADER)
+    assert _read_back(text) == rows
+    assert _read_back(text.encode("utf-8").decode("utf-8")) == rows
+
+
+def test_sheet_csv_round_trip_tricky_names():
+    p, _ = _rig()
+    names = ["Стик; с точкой с запятой", 'кавычки "внутри"', "1.5", "перевод\nстроки", "  пробелы  ", ""]
+    fxs = list(p.fixtures)
+    for k, nm in enumerate(names):
+        fxs[k] = replace(fxs[k], name=nm)
+    p = replace(p, fixtures=tuple(fxs))
+    rows = dsm_locate.sheet_rows(p, api.segments_by_fixture(p))
+    assert [r[2] for r in rows[1:1 + len(names)]] == names
+    assert _read_back(dsm_locate.sheet_csv(rows)) == rows
+
+
+def test_sheet_csv_uses_core_writer():
+    from dsm_core.csv_io import CsvDialect, rows_to_csv
+    rows = [["a", "b;c", "Ё"], ["1", "2.5", 'q"']]
+    assert dsm_locate.sheet_csv(rows) == rows_to_csv(rows, CsvDialect(";", "."))
