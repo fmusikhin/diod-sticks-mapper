@@ -1,0 +1,22 @@
+{
+  "feature_name": "locate-test",
+  "created_at": "2026-10-20T19:57:43Z",
+  "updated_at": "2026-10-20T19:57:43Z",
+  "language": "ru",
+  "phase": "requirements-generated",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": false
+    },
+    "design": {
+      "generated": false,
+      "approved": false
+    },
+    "tasks": {
+      "generated": false,
+      "approved": false
+    }
+  },
+  "ready_for_implementation": false
+}
