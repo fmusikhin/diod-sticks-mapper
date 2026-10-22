@@ -319,3 +319,218 @@ def test_output_summary():
     assert s2["channels_used"] == 510 + 411 + 9 + 81 and s2["cells"] == 144 * 2 + 30 * 2
     assert pv.output_summary(patch, segs, "out3") == {
         "universes_used": 1, "universes_declared": 1, "channels_used": 432, "fixtures": 1, "cells": 144}
+
+
+# ---------- 1.5 чистое попадание и адрес по точке (4.1, 4.2, 10.1) ----------
+
+def _centers(rows_):
+    """Центры всех прямоугольников таблицы pv_rects (без заголовка): (u, v, kind, id)."""
+    for r in rows_:
+        x, y, w, h = (float(c) for c in r[:4])
+        yield x + w / 2, y + h / 2, r[9], r[10]
+
+
+def test_hit_dataclass_is_frozen_and_none_outside_area():
+    _, layout = _layout()
+    for u, v in [(-0.01, 0.5), (1.01, 0.5), (0.5, -0.01), (0.5, 1.01)]:
+        assert pv.hit(layout, u, v) == pv.Hit(None, None, None, None)
+    with pytest.raises(Exception):
+        pv.hit(layout, 0.5, 0.5).row = 3                                                 # frozen
+
+
+def test_hit_and_map_rects_are_inverse_on_segment_centers():
+    _, layout = _layout()
+    rows = pv.map_rects(layout, set(), pv.Geom())
+    n = len(layout.rows)
+    seg_rows = [r for r in rows[1:] if r[8] == "1"]
+    assert seg_rows
+    for u, v, kind, fid in _centers(seg_rows):
+        h = pv.hit(layout, u, v)
+        assert h.segment is not None and h.segment.fixture_id == fid and h.fixture_id == fid
+        assert h.segment.kind == kind
+        assert h.row == h.segment.row and h.segment.first_channel <= h.channel <= h.segment.last_channel
+        assert 1.0 - (h.row + 1) / n <= v < 1.0 - h.row / n
+        assert (h.channel - 1) / 512 <= u < h.channel / 512
+
+
+def test_hit_on_background_without_segment_gives_row_and_channel_only():
+    _, layout = _layout()
+    n = len(layout.rows)
+    r6 = _row(layout, "out1", 6)                                                        # пустой заявленный юниверс
+    v = 1.0 - (r6.index + 0.5) / n
+    for k in (1, 100, 511, 512):
+        assert pv.hit(layout, (k - 0.5) / 512, v) == pv.Hit(r6.index, k, None, None)
+    # строка 0: fx1 1–432, fx2 433–510; 511–512 — никем
+    h = pv.hit(layout, 511.5 / 512, 1.0 - 0.5 / n)
+    assert h == pv.Hit(0, 512, None, None)
+
+
+def test_hit_edges_and_clamping():
+    _, layout = _layout()
+    n = len(layout.rows)
+    top = pv.hit(layout, 0.0, 1.0)                                                       # левый верх — строка 0, канал 1
+    assert (top.row, top.channel, top.fixture_id) == (0, 1, "fx1")
+    bottom = pv.hit(layout, 0.0, 0.0)                                                    # v = 0 — последняя строка
+    assert (bottom.row, bottom.channel, bottom.fixture_id) == (n - 1, 1, "fx9")
+    assert pv.hit(layout, 1.0, 0.5).channel == 512                                       # u = 1 — зажим в 512
+    assert pv.hit(layout, 0.999999, 0.5).channel == 512
+    assert pv.hit(layout, 1 / 512, 1.0).channel == 2                                     # граница канала — следующий
+    assert pv.hit(layout, 0.0, 1.0 - 1 / n).row == 1                                     # граница строк — следующая
+    empty = pv.MapLayout((), (), {})
+    assert pv.hit(empty, 0.5, 0.5) == pv.Hit(None, None, None, None)
+
+
+def test_hit_overlap_returns_last_drawn_segment():
+    """fx5 (1–432) и fx6 (400–489) наложены в out2:10 — побеждает верхний (последний в layout.segments)."""
+    _, layout = _layout()
+    n = len(layout.rows)
+    r10 = _row(layout, "out2", 10)
+    v = 1.0 - (r10.index + 0.5) / n
+    order = [s.fixture_id for s in layout.segments if s.row == r10.index]
+    assert order.index("fx5") < order.index("fx6")
+    h = pv.hit(layout, 419.5 / 512, v)
+    assert h.channel == 420 and h.fixture_id == "fx6" and h.segment.first_channel == 400
+    assert pv.hit(layout, 399.5 / 512, v).fixture_id == "fx6"                           # первый канал fx6
+    assert pv.hit(layout, 398.5 / 512, v).fixture_id == "fx5"
+    assert pv.hit(layout, 489.5 / 512, v).fixture_id == "fx7"                           # 490 — fx7
+
+
+def test_zoom_hit_cells_and_inverse_with_zoom_rects():
+    _, layout = _layout()
+    geom = pv.Geom()
+    row = _row(layout, "out2", 10).index
+    cw, chh = 1 / 32, 1 / 16
+    assert pv.zoom_hit(layout, row, 0.5 * cw, 1 - 0.5 * chh).channel == 1                # левый верх
+    assert pv.zoom_hit(layout, row, 31.5 * cw, 1 - 0.5 * chh).channel == 32
+    assert pv.zoom_hit(layout, row, 0.5 * cw, 1 - 1.5 * chh).channel == 33               # вторая строка сетки
+    assert pv.zoom_hit(layout, row, 31.5 * cw, 0.5 * chh).channel == 512                 # правый низ
+    assert pv.zoom_hit(layout, row, 1.0, 0.0).channel == 512                             # зажим краёв
+    assert pv.zoom_hit(layout, row, 0.0, 1.0).channel == 1
+    assert pv.zoom_hit(layout, row, 1.5, 0.5) == pv.Hit(None, None, None, None)
+    h = pv.zoom_hit(layout, row, 9.5 * cw, 0.5 * chh)                                    # канал 490 — fx7
+    assert (h.row, h.channel, h.fixture_id) == (row, 490, "fx7") and h.segment.fixture_id == "fx7"
+    assert pv.zoom_hit(layout, row, 30.5 * cw, 0.5 * chh) == pv.Hit(row, 511, None, None)
+    # взаимно обратны с zoom_rects: клетки слоя 0 → канал k по порядку; сегменты слоя 1 → та же фикстура
+    rows = pv.zoom_rects(layout, row, geom)
+    cells = [r for r in rows[1:] if r[8] == "0"]
+    for k, (u, v, _, _) in enumerate(_centers(cells), start=1):
+        assert pv.zoom_hit(layout, row, u, v).channel == k
+    order = [s.fixture_id for s in layout.segments]
+    for u, v, _, fid in _centers([r for r in rows[1:] if r[8] == "1"]):
+        h = pv.zoom_hit(layout, row, u, v)
+        # либо та же фикстура, либо её перекрыл сегмент, нарисованный позже (наложение fx5/fx6)
+        assert h.fixture_id == fid or order.index(h.fixture_id) > order.index(fid)
+    # fx5 (1–432) под fx6 (400–489): клетка 420 — fx6 (верхний)
+    h420 = pv.zoom_hit(layout, row, 3.5 * cw, 1 - 13.5 * chh)
+    assert (h420.channel, h420.fixture_id) == (420, "fx6")
+    with pytest.raises(IndexError):
+        pv.zoom_hit(layout, len(layout.rows), 0.5, 0.5)
+
+
+def test_drop_address_snap_to_cell_grid_and_free():
+    patch, layout = _layout()
+    r1 = _row(layout, "out1", 1).index
+    # стик GRB — 3 канала на ячейку: сетка 1, 4, 7, …
+    assert pv.drop_address(layout, patch, "fx1", r1, 5, True) == ("out1", 1, 4)
+    assert pv.drop_address(layout, patch, "fx1", r1, 6, True) == ("out1", 1, 7)
+    assert pv.drop_address(layout, patch, "fx1", r1, 4, True) == ("out1", 1, 4)
+    assert pv.drop_address(layout, patch, "fx1", r1, 1, True) == ("out1", 1, 1)
+    assert pv.drop_address(layout, patch, "fx1", r1, 2, True) == ("out1", 1, 1)
+    assert pv.drop_address(layout, patch, "fx1", r1, 3, True) == ("out1", 1, 4)
+    assert pv.drop_address(layout, patch, "fx1", r1, 5, False) == ("out1", 1, 5)
+    assert pv.drop_address(layout, patch, "fx1", r1, 6, False) == ("out1", 1, 6)
+    # 16-битный тип — 6 каналов на ячейку: сетка 1, 7, 13
+    ft16 = [replace(t, bits=16) if t.id == "strip30" else t for t in patch.fixture_types]
+    p16 = replace(patch, fixture_types=tuple(ft16))
+    assert pv.drop_address(layout, p16, "fx4", r1, 5, True) == ("out1", 1, 7)
+    assert pv.drop_address(layout, p16, "fx4", r1, 3, True) == ("out1", 1, 1)
+
+
+def test_drop_address_edges_other_output_and_bad_row():
+    patch, layout = _layout()
+    r1 = _row(layout, "out1", 1).index
+    assert pv.drop_address(layout, patch, "fx1", r1, 0, False) == ("out1", 1, 1)
+    assert pv.drop_address(layout, patch, "fx1", r1, -7, True) == ("out1", 1, 1)
+    assert pv.drop_address(layout, patch, "fx1", r1, 600, False) == ("out1", 1, 512)
+    assert pv.drop_address(layout, patch, "fx1", r1, 512, False) == ("out1", 1, 512)
+    assert pv.drop_address(layout, patch, "fx1", r1, 600, True) == ("out1", 1, 511)     # ближайшее начало ячейки ≤ 512
+    assert pv.drop_address(layout, patch, "fx1", r1, 511, True) == ("out1", 1, 511)
+    # строка другого выхода — перенос (4.2): fx1 с out1 на строку out2:10
+    r10 = _row(layout, "out2", 10).index
+    assert pv.drop_address(layout, patch, "fx1", r10, 100, True) == ("out2", 10, 100)
+    r3 = _row(layout, "out3", 1).index
+    assert pv.drop_address(layout, patch, "fx5", r3, 7, False) == ("out3", 1, 7)
+    for bad in (-1, len(layout.rows), 99):
+        with pytest.raises(ValueError):
+            pv.drop_address(layout, patch, "fx1", bad, 1, False)
+    with pytest.raises(KeyError):
+        pv.drop_address(layout, patch, "nope", r1, 1, False)
+
+
+def test_drop_address_from_grab_keeps_grab_offset():
+    patch, layout = _layout()
+    n = len(layout.rows)
+    r0 = _row(layout, "out1", 0)
+    v0 = 1.0 - (r0.index + 0.5) / n
+    grab = pv.hit(layout, 439.5 / 512, v0)                                              # fx2 433–510, захват на 440
+    assert (grab.fixture_id, grab.channel) == ("fx2", 440)
+    # отпустили на канале 100 строки 1 — начало сегмента 100 − 7 = 93; с привязкой → 94 (сетка …, 91, 94)
+    r1 = _row(layout, "out1", 1)
+    v1 = 1.0 - (r1.index + 0.5) / n
+    assert pv.drop_address_from_grab(layout, patch, "fx2", grab, 99.5 / 512, v1, False) == ("out1", 1, 93)
+    assert pv.drop_address_from_grab(layout, patch, "fx2", grab, 99.5 / 512, v1, True) == ("out1", 1, 94)
+    # без сдвига курсора — прежний адрес
+    assert pv.drop_address_from_grab(layout, patch, "fx2", grab, 439.5 / 512, v0, False) == ("out1", 0, 433)
+    assert pv.drop_address_from_grab(layout, patch, "fx2", grab, 439.5 / 512, v0, True) == ("out1", 0, 433)
+    # зажим в край: курсор левее смещения
+    assert pv.drop_address_from_grab(layout, patch, "fx2", grab, 2.5 / 512, v1, False) == ("out1", 1, 1)
+    # другой выход — перенос с сохранением смещения
+    r10 = _row(layout, "out2", 10)
+    v10 = 1.0 - (r10.index + 0.5) / n
+    assert pv.drop_address_from_grab(layout, patch, "fx2", grab, 207.5 / 512, v10, False) == ("out2", 10, 201)
+    # захват без сегмента (подложка) — смещение 0
+    bare = pv.hit(layout, 0.5 / 512, 1.0 - (_row(layout, "out1", 6).index + 0.5) / n)
+    assert bare.segment is None
+    assert pv.drop_address_from_grab(layout, patch, "fx2", bare, 99.5 / 512, v1, False) == ("out1", 1, 100)
+    # курсор вне области — ValueError
+    with pytest.raises(ValueError):
+        pv.drop_address_from_grab(layout, patch, "fx2", grab, 1.5, 0.5, False)
+
+
+def test_drop_address_from_grab_offset_is_from_fixture_address_not_segment():
+    """Смещение — от адреса фикстуры (первый сегмент), не от захваченного сегмента: head/tail и продолжение
+    через границу юниверса. Отпускание на месте всегда возвращает текущий адрес."""
+    # bar_common_channels fx1: адрес 0:1, head 1–2, cells 3–26, tail 27
+    patch, layout = _layout(ROOT / "examples" / "bar_common_channels.json")
+    n = len(layout.rows)
+    v0 = 1.0 - 0.5 / n
+    grab = pv.hit(layout, 9.5 / 512, v0)                                                # захват на канале 10 (cells)
+    assert (grab.fixture_id, grab.channel, grab.segment.kind) == ("fx1", 10, "cells")
+    assert pv.drop_address_from_grab(layout, patch, "fx1", grab, 9.5 / 512, v0, False) == ("out1", 0, 1)
+    assert pv.drop_address_from_grab(layout, patch, "fx1", grab, 9.5 / 512, v0, True) == ("out1", 0, 1)
+    tail = pv.hit(layout, 26.5 / 512, v0)                                               # захват за tail
+    assert tail.segment.kind == "tail"
+    assert pv.drop_address_from_grab(layout, patch, "fx1", tail, 26.5 / 512, v0, False) == ("out1", 0, 1)
+    assert pv.drop_address_from_grab(layout, patch, "fx1", grab, 14.5 / 512, v0, False) == ("out1", 0, 6)   # сдвиг +5
+    assert pv.drop_address_from_grab(layout, patch, "fx1", grab, 14.5 / 512, v0, True) == ("out1", 0, 7)    # сетка 1,4,7
+    # стенд fx2: 0:433–510 + 1:1–354 — захват второго сегмента в строке юниверса 1
+    patch, layout = _layout()
+    n = len(layout.rows)
+    r0, r1 = _row(layout, "out1", 0), _row(layout, "out1", 1)
+    v0, v1 = 1.0 - (r0.index + 0.5) / n, 1.0 - (r1.index + 0.5) / n
+    grab2 = pv.hit(layout, 99.5 / 512, v1)                                              # fx2, строка 1, канал 100
+    assert (grab2.fixture_id, grab2.row, grab2.channel) == ("fx2", r1.index, 100)
+    assert pv.drop_address_from_grab(layout, patch, "fx2", grab2, 99.5 / 512, v1, False) == ("out1", 0, 433)
+    assert pv.drop_address_from_grab(layout, patch, "fx2", grab2, 99.5 / 512, v1, True) == ("out1", 0, 433)
+    # сдвиг на N каналов сохраняет N; разница строк сохраняется (строка курсора 2 → адрес в строке 1)
+    assert pv.drop_address_from_grab(layout, patch, "fx2", grab2, 109.5 / 512, v1, False) == ("out1", 0, 443)
+    assert pv.drop_address_from_grab(layout, patch, "fx2", grab2, 89.5 / 512, v1, False) == ("out1", 0, 423)
+    v2 = 1.0 - (_row(layout, "out1", 2).index + 0.5) / n
+    assert pv.drop_address_from_grab(layout, patch, "fx2", grab2, 99.5 / 512, v2, False) == ("out1", 1, 433)
+    # разница строк увела бы выше первой строки карты — зажим в строку 0
+    assert pv.drop_address_from_grab(layout, patch, "fx2", grab2, 99.5 / 512, v0, False) == ("out1", 0, 433)
+    # захват своего сегмента в строке адреса — как раньше
+    grab0 = pv.hit(layout, 439.5 / 512, v0)
+    assert pv.drop_address_from_grab(layout, patch, "fx2", grab0, 439.5 / 512, v0, False) == ("out1", 0, 433)
+    # фикстуры нет в раскладке (не размещена) — смещение 0
+    assert pv.drop_address_from_grab(layout, patch, "fx10", grab2, 99.5 / 512, v1, False) == ("out1", 1, 100)

@@ -12,7 +12,7 @@ import zlib
 from dataclasses import dataclass, field
 
 from dsm_core.addressing import Segment
-from dsm_core.model import Patch
+from dsm_core.model import Patch, get_fixture, get_fixture_type
 from dsm_core.protocol import ARTNET_MAX, Protocol, dotted, format_universe
 from dsm_core.validate_types import Issue, IssueLevel
 
@@ -70,6 +70,19 @@ class MapLayout:
     skip_511_512: dict[str, bool]                      # по выходу
     names: dict[str, str] = field(default_factory=dict)   # fixture_id → подпись (имя или id)
     protocols: dict[str, Protocol] = field(default_factory=dict)   # output_id → протокол (подписи юниверсов)
+
+
+@dataclass(frozen=True)
+class Hit:
+    """Попадание в карту (4.1): всё ``None`` — точка вне области; ``segment``/``fixture_id`` ``None`` — подложка."""
+
+    row: int | None
+    channel: int | None          # 1–512
+    segment: SegInfo | None
+    fixture_id: str | None
+
+
+NO_HIT = Hit(None, None, None, None)
 
 
 # ---------- цвет фикстуры (2.6) ----------
@@ -257,6 +270,107 @@ def label_rows(layout: MapLayout, geom: Geom) -> Rows:
         out.append([_f((s.first_channel - 1) * ch), _f(1.0 - (s.row + 0.5) * rh), f"{name} · {s.cells} px", "segment",
                     s.fixture_id, "1" if w >= geom.label_min_frac else "0"])
     return out
+
+
+# ---------- попадание и адрес по точке (4.1, 4.2) ----------
+
+def _inside(u: float, v: float) -> bool:
+    return 0.0 <= u <= 1.0 and 0.0 <= v <= 1.0
+
+
+def _cell_index(frac: float, count: int) -> int:
+    """Индекс клетки по доле ``frac`` при ``count`` клетках: ``floor(frac·count)`` с зажимом в ``count-1`` (край 1.0)."""
+    return min(int(frac * count), count - 1)
+
+
+def _segment_at(layout: MapLayout, row: int, channel: int) -> SegInfo | None:
+    """Сегмент строки под каналом. При наложении (конфликт ядра) побеждает последний в ``layout.segments`` —
+    он же нарисован поверх в ``map_rects``/``zoom_rects`` (слои идут в порядке списка)."""
+    found = None
+    for s in layout.segments:
+        if s.row == row and s.first_channel <= channel <= s.last_channel:
+            found = s
+    return found
+
+
+def hit(layout: MapLayout, u: float, v: float) -> Hit:
+    """Попадание в карту по долям области (``u`` слева направо, ``v`` снизу вверх, как панель TD). Та же геометрия,
+    что в ``map_rects``: строка ``i`` занимает ``[1-(i+1)/rows, 1-i/rows)`` (считаем сверху: ``i = floor((1-v)·rows)``),
+    канал ``k`` — ``[(k-1)/512, k/512)``; края ``u=1``/``v=0`` зажимаются в последние клетку/строку."""
+    n = len(layout.rows)
+    if not n or not _inside(u, v):
+        return NO_HIT
+    row = _cell_index(1.0 - v, n)
+    channel = 1 + _cell_index(u, DMX_CHANNELS)
+    seg = _segment_at(layout, row, channel)
+    return Hit(row, channel, seg, seg.fixture_id if seg else None)
+
+
+def zoom_hit(layout: MapLayout, row: int, u: float, v: float, geom: Geom = Geom()) -> Hit:
+    """Попадание в крупный юниверс строки ``row`` (сетка ``zoom_cols × zoom_rows`` как в ``zoom_rects``: клетка
+    ``k`` → колонка ``(k-1) % cols`` слева, строка ``(k-1) // cols`` сверху). ``row`` вне диапазона → ``IndexError``."""
+    layout.rows[row]                     # IndexError на плохой строке — до проверки точки
+    if not _inside(u, v):
+        return NO_HIT
+    gc = _cell_index(u, geom.zoom_cols)
+    gr = _cell_index(1.0 - v, geom.zoom_rows)
+    channel = min(1 + gr * geom.zoom_cols + gc, DMX_CHANNELS)
+    seg = _segment_at(layout, row, channel)
+    return Hit(row, channel, seg, seg.fixture_id if seg else None)
+
+
+def _snap_channel(channel: int, cpc: int) -> int:
+    """Ближайшее начало ячейки ``1 + k·cpc`` (сетка от канала 1, head-каналы не учитываются); при равном расстоянии —
+    вверх. Результат не выходит за 512: при необходимости — последнее начало ячейки ≤ 512."""
+    if cpc <= 1:
+        return channel
+    k = (channel - 1 + cpc // 2) // cpc
+    snapped = 1 + k * cpc
+    while snapped > DMX_CHANNELS:
+        snapped -= cpc
+    return max(1, snapped)
+
+
+def drop_address(layout: MapLayout, patch: Patch, fixture_id: str, row: int, channel: int,
+                 snap: bool) -> tuple[str, int, int]:
+    """Адрес по точке отпускания (4.1, 4.2): выход и юниверс строки ``row`` (строка другого выхода — перенос на него),
+    канал зажат в 1–512; при ``snap`` — к ближайшему началу ячейки по ``channels_per_cell`` типа фикстуры.
+    ``row`` вне диапазона → ``ValueError``; неизвестная фикстура → ``KeyError`` ядра."""
+    if not 0 <= row < len(layout.rows):
+        raise ValueError(f"строка карты {row} вне диапазона 0–{len(layout.rows) - 1}")
+    info = layout.rows[row]
+    fx = get_fixture(patch, fixture_id)
+    ch = max(1, min(DMX_CHANNELS, channel))
+    if snap:
+        ch = _snap_channel(ch, get_fixture_type(patch, fx.type_id).channels_per_cell)
+    return info.output_id, info.universe, ch
+
+
+def _first_segment(layout: MapLayout, fixture_id: str) -> SegInfo | None:
+    """Первый сегмент фикстуры в раскладке (минимальная строка, минимальный канал) — его начало и есть адрес
+    фикстуры (``Address.channel``: head-блок или первая ячейка), для auto и manual одинаково."""
+    own = [s for s in layout.segments if s.fixture_id == fixture_id]
+    return min(own, key=lambda s: (s.row, s.first_channel)) if own else None
+
+
+def drop_address_from_grab(layout: MapLayout, patch: Patch, fixture_id: str, grab: Hit, u: float, v: float,
+                           snap: bool) -> tuple[str, int, int]:
+    """Адрес при перетаскивании: сдвиг курсора от точки захвата переносится на адрес фикстуры — начало её первого
+    сегмента (``_first_segment``), а не захваченного: строка = ``first.row + (cur.row − grab.row)``, канал =
+    ``first.first_channel + (cur.channel − grab.channel)``. Поэтому отпускание на месте всегда даёт текущий адрес
+    (с привязкой — ближайшую сетку от него), а захват head/tail или продолжения в следующем юниверсе сохраняет
+    разницу строк. Строка, ушедшая за край карты, зажимается в 0 / последнюю; затем ``drop_address``.
+    Захват без сегмента или фикстура не в раскладке — смещения нет (адрес по точке курсора). Курсор вне области
+    карты → ``ValueError``."""
+    cur = hit(layout, u, v)
+    if cur.row is None or cur.channel is None:
+        raise ValueError("точка отпускания вне области карты")
+    row, channel = cur.row, cur.channel
+    first = _first_segment(layout, fixture_id)
+    if first is not None and grab.segment is not None and grab.row is not None and grab.channel is not None:
+        row = max(0, min(len(layout.rows) - 1, first.row + (cur.row - grab.row)))
+        channel = first.first_channel + (cur.channel - grab.channel)
+    return drop_address(layout, patch, fixture_id, row, channel, snap)
 
 
 # ---------- сводка выхода (2.7) ----------
