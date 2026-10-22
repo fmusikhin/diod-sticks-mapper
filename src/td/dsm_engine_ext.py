@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import time
 import traceback
-from typing import Literal
+from typing import Callable, Literal
 
 Status = Literal["no patch", "ok", "error"]
 
@@ -63,13 +64,23 @@ def ensure_core_on_path() -> None:
         sys.path.insert(0, path)
 
 
+def _same_hook(a, b) -> bool:
+    """Тот же хук: та же функция или тот же метод того же класса (расширение переинициализировано отдельно —
+    старый bound-метод прежнего экземпляра заменяется, а не дублируется)."""
+    if a == b:
+        return True
+    sa, sb = getattr(a, "__self__", None), getattr(b, "__self__", None)
+    return (sa is not None and sb is not None and type(sa).__name__ == type(sb).__name__
+            and getattr(a, "__name__", None) == getattr(b, "__name__", None))
+
+
 def rows_to_text(rows: list[list[str]]) -> str:
     return "\n".join("\t".join(str(c) for c in r) for r in rows)
 
 
 class DsmEngineExt:
     """Публичные методы (с заглавной — промоутятся на COMP): Reload, LoadPatch, ReportError, ApplyActive, CheckFile,
-    PatchDir, PatchName, ResolvePath, UpdateCounters."""
+    PatchDir, PatchName, ResolvePath, UpdateCounters, SavePatch, AddListener, AddInfoProvider, WriteInfo, SetCounterFilter."""
 
     def __init__(self, ownerComp) -> None:
         self.ownerComp = ownerComp
@@ -84,6 +95,10 @@ class DsmEngineExt:
         self.counters: dict = {}            # fps, пакеты, куки — обновляет UpdateCounters раз в секунду
         self._last_tick: tuple[float, int, dict] | None = None   # (время, кадр, totalCooks узлов)
         self._last_node_message: str = ""
+        self._listeners: list[Callable] = []        # внутренние слушатели загрузки (Locate и др.), не колбэк пользователя
+        self._info_providers: list[Callable] = []   # дополнительные строки info [[key, value], ...]
+        self._counter_filter: str | None = None     # подстрока предупреждения узла, которую не передавать
+        self._backed_up: set[str] = set()           # файлы патча, для которых за сеанс сделана резервная копия
         ensure_core_on_path()
         from dsm_core import api  # после ensure_core_on_path
         self.api = api
@@ -166,7 +181,75 @@ class DsmEngineExt:
         self._write_info()
         self.ApplyActive()
         self._call("onPatchLoaded", patch, list(issues))
+        for fn in list(self._listeners):
+            try:
+                fn(patch, list(issues))
+            except Exception:  # слушатель внутри компонента — в textport, загрузка не прерывается
+                print(f"dsm: ошибка слушателя загрузки:\n{traceback.format_exc()}")
         return True
+
+    # ------------------------------------------------------------------ запись патча и события (locate-test 1.1)
+    def SavePatch(self, edit: Callable, rebuild: bool) -> bool:
+        """Записать правку патча в файл. ``edit(patch) -> patch`` применяется к документу, заново прочитанному из файла
+        (до автоадресации, чтобы в файл не ушли раздаваемые адреса), и к рабочему патчу в памяти.
+        При первой записи за сеанс — резервная копия ``<имя>.bak.json`` рядом. ``rebuild=False`` — без пересборки
+        (дата файла запоминается, автоперезагрузка не срабатывает); ``rebuild=True`` — обычная загрузка.
+        Ошибка — прежний файл, сообщение в info и onOutputError, рабочий патч и статус движка прежние (вывод не
+        останавливается); возвращает False."""
+        api = self.api
+        full = self.ResolvePath(self.patch_path)       # файл загруженного патча, а не пары Patchfile (LoadPatch(путь))
+        if not full or self.patch is None:
+            self._save_failed("запись патча: патч не загружен")
+            return False
+        try:
+            doc, _notes = api.load(full)
+            new_doc = edit(doc)
+            new_work = edit(self.patch)
+            if full not in self._backed_up:
+                shutil.copy2(full, os.path.splitext(full)[0] + ".bak.json")
+                self._backed_up.add(full)
+            api.save(new_doc, full)
+        except Exception as e:  # ядро, файл или функция правки — прежний файл, сообщение, вывод не останавливается
+            if not isinstance(e, (OSError, ValueError, api.PatchError)):
+                print(traceback.format_exc())
+            tmp = full + ".tmp"                          # ядро пишет через временный файл — не оставлять мусор рядом
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            self._save_failed(f"запись патча не удалась: {full}: {type(e).__name__}: {e}")
+            return False
+        if rebuild:
+            return self.LoadPatch(self.patch_path)
+        self.patch = new_work
+        if full == self.ResolvePath(self.ownerComp.par.Patchfile.eval()):
+            self.loaded_mtime = os.path.getmtime(full)  # автоперезагрузка следит за Patchfile — свою запись не считать правкой
+        self.message = ""
+        self._write_info()
+        return True
+
+    def _save_failed(self, message: str) -> None:
+        self.message = message
+        self._write_info()
+        self._call("onOutputError", message)
+
+    def AddListener(self, fn: Callable) -> None:
+        """Внутренний слушатель успешной загрузки ``fn(patch, issues)`` — для частей компонента (Locate),
+        колбэк пользователя onPatchLoaded остаётся свободным."""
+        self._listeners = [f for f in self._listeners if not _same_hook(f, fn)] + [fn]
+
+    def AddInfoProvider(self, fn: Callable) -> None:
+        """Поставщик дополнительных строк info ``fn() -> [[key, value], ...]`` — дописываются при каждой записи info."""
+        self._info_providers = [f for f in self._info_providers if not _same_hook(f, fn)] + [fn]
+
+    def WriteInfo(self) -> None:
+        """Переписать таблицу info сейчас (внутренние поставщики строк зовут после своих команд)."""
+        self._write_info()
+
+    def SetCounterFilter(self, text: str | None) -> None:
+        """Подстрока предупреждения узла, которую счётчики не передают в info и onOutputError (None — снять)."""
+        self._counter_filter = text or None
 
     def ApplyActive(self) -> None:
         """Политика отправки: узлы вывода активны, только если пара Active включена и патч загружен (status ok).
@@ -254,6 +337,8 @@ class DsmEngineExt:
                 continue
             for text in (n.errors(), n.warnings()):
                 text = (text or "").strip()
+                if text and self._counter_filter:
+                    text = "\n".join(s for s in text.splitlines() if self._counter_filter not in s).strip()
                 if text:
                     msgs.append(f"{n.path.split('/dsm/')[-1]}: {text.splitlines()[0]}")
         c["node_messages"] = msgs
@@ -355,6 +440,11 @@ class DsmEngineExt:
             rows.append(["warning", w])
         for i in self.issues:
             rows.append([f"issue_{i.level.value}", f"{i.code.value}: {i.message}"])
+        for fn in list(self._info_providers):
+            try:
+                rows.extend([str(k), str(v)] for k, v in fn())
+            except Exception:  # поставщик внутри компонента — в textport, info пишется без его строк
+                print(f"dsm: ошибка поставщика info:\n{traceback.format_exc()}")
         self._table("info").text = rows_to_text(rows)
 
     def _call(self, name: str, *args) -> None:
