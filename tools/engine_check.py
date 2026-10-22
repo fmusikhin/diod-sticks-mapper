@@ -147,7 +147,7 @@ def start(mode: str = "examples") -> None:
         _s.clear()
         queue = ["../examples/" + f for f in sorted(os.listdir(os.path.join(_repo_root(), "examples"))) if f.endswith(".json")]
         queue += ["stand/" + f for f in sorted(os.listdir(os.path.join(project.folder, "stand")))  # noqa: F821
-                  if f.endswith(".json") and f not in ("delay_test.json",)]
+                  if f.endswith(".json") and f not in ("delay_test.json", "patchview_test.json")]  # патчи с ошибками ядра — свои режимы
         _s.update(mode=mode, t0=time.time(), results={}, queue=queue)
         _s["saved"] = dict(patch=dsm.par.Patchfile.eval(), active=dsm.par.Active.eval(), master=dsm.par.Master.eval(),
                            src=op("/project1/dsm_test_in").par.top.val or "stand/test_src")  # noqa: F821
