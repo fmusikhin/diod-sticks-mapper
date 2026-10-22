@@ -205,7 +205,7 @@ graph TB
 | 2.7 | сводка выхода | `output_summary` → `pv_outputs` | | |
 | 3.1 | красные/жёлтые отметки | `map_rects` слой `issue` по `issue_table` | | |
 | 3.2 | список проблем, переход | `issues_list` ← `pv_issues`, `ShowIssue` | `onSelectRow` | |
-| 3.3 | не размещены | `pv_unassigned` в `issues_list`/`sheet`, перетаскивание из списка | | |
+| 3.3 | не размещены | `pv_unassigned` → листер «не размещены» в `side_tabs`; выбор строки + клик по карте (drag из листера — если есть колбэк drop) | | |
 | 3.4 | счётчики | `counters` ← `pv_status` | | |
 | 4.1 | перетаскивание, шаг ячейки, Shift | `hit`, `drop_address(snap)`, `ReAddress` | `panelexec_map` | Переадресация |
 | 4.2 | на другой выход | `drop_address` (строка другого выхода) → `assign_to_output`/`set_manual_address` | | Переадресация |
@@ -337,7 +337,7 @@ class DsmPatchViewExt:
   перестроены, `undo_doc` заполнен; отказ → патч, файл и карта прежние, `message`, `onOutputError`.
 
 ##### State Management
-- Таблицы: `tables/pv_rects`, `pv_preview`, `pv_zoom`, `pv_labels`, `pv_rows`, `pv_issues`, `pv_outputs`, `pv_ports`,
+- Таблицы: `tables/pv_rects`, `pv_preview`, `pv_zoom`, `pv_labels`, `pv_rows`, `pv_issues`, `pv_unassigned`, `pv_outputs`, `pv_ports`,
   `pv_sheet`, `pv_status` (key/value: output, errors, warnings, message, selection) — пишутся одной операцией каждая.
 - Служебные COMP с кастом-парами: `ui_dmx/output_edit` (имя, протокол, цель, IP, стартовый юниверс, диапазон, правила,
   частота, ArtSync, priority, задержка), `ui_dmx/port_edit`, `ui_dmx/fixture_edit` (юниверс, канал выбранной фикстуры).
@@ -353,8 +353,11 @@ class DsmPatchViewExt:
   поля) на корне панели, авто-раскладка (`verttb` корень, `horizlr` тело), `viewer=True`, `resizecomp/repocomp`
   константами, `resetNodeSize`, шрифты — TD-поставляемые (`PT Mono`/`Open Sans`).
 - Карта: `map_area.par.top = map_render/out`; `panelexec_map` на `lselect`/`u`/`v`/`inside` → `OnMap`; подсказка `tooltip`
-  (`alignallow=ignore`, `layer 10`) по `hit`. Подписи сегментов — `labels_render` (`textTOP`-инстансы или `geotextCOMP`) —
-  решение в задаче по читаемости; минимум — подписи юниверсов слева и подсказка.
+  (`alignallow=ignore`, `layer 10`) по `hit`. Подписи сегментов — `labels_render` (`geotextCOMP`-инстансы или `textTOP`) для
+  сегментов шире порога `Geom.Labelmin` (px); юниверсы подписаны слева всегда; выбор техники — по читаемости в задаче 3.2 (2.3).
+- Не размещённые фикстуры (3.3): таблица `pv_unassigned` → список в `side_tabs`; размещение — выбор строки + клик по карте
+  (адрес по точке общим путём); перетаскивание из листера на карту — только если `listCOMP` даёт колбэк drop (мануал `lister`).
+- «Подряд» для нескольких фикстур (4.5): множественный выбор в листе адресов + кнопка; без множественного выбора — методом.
 - Листеры: четыре клона `op.TDTox.op('lister')` с копиями `listerConfig`, источники — таблицы `pv_*`, цвет строк проблем —
   `SetCellOverlay`, выбор → `onSelectRow` → методы расширения через `parent.dmx`; `Inputtabledat` — имя соседа.
 - Редакторы: `parameterCOMP` на `output_edit`/`port_edit`/`fixture_edit`; `parexec_edit` → `OnDmxPar` → правка ядра.
