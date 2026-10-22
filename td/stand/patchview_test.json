@@ -1,0 +1,602 @@
+{
+  "canvas": {
+    "background": null,
+    "height": 720,
+    "px_per_m": null,
+    "units": "px",
+    "width": 1280
+  },
+  "fixture_types": [
+    {
+      "bits": 8,
+      "cell_extra": [],
+      "cells": 144,
+      "cells_per_m": 144.0,
+      "color_order": "GRB",
+      "gamma": 1.0,
+      "head": [],
+      "height": 1,
+      "id": "stick",
+      "kind": "stick",
+      "layout": "tl_rows",
+      "length_mm": 1000.0,
+      "name": "Стик 1 м 144 px",
+      "pitch_mm": 6.944444444444445,
+      "tail": [],
+      "watts_per_cell": null,
+      "white_balance": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "white_mode": "none",
+      "width": 1
+    },
+    {
+      "bits": 8,
+      "cell_extra": [],
+      "cells": 30,
+      "cells_per_m": 60.0,
+      "color_order": "RGB",
+      "gamma": 1.0,
+      "head": [],
+      "height": 1,
+      "id": "strip30",
+      "kind": "strip",
+      "layout": "tl_rows",
+      "length_mm": null,
+      "name": "Лента 30 px RGB",
+      "pitch_mm": 16.666666666666668,
+      "tail": [],
+      "watts_per_cell": null,
+      "white_balance": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "white_mode": "none",
+      "width": 1
+    }
+  ],
+  "fixtures": [
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 1,
+        "channel_offset": 0,
+        "mode": "auto",
+        "output_id": "out1",
+        "port_id": "port1",
+        "universe": 0
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [],
+      "id": "fx1",
+      "length_mm": null,
+      "mute": false,
+      "name": "Стик 1",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "kind": "line",
+        "p1": [
+          120.0,
+          100.0
+        ],
+        "p2": [
+          120.0,
+          620.0
+        ]
+      },
+      "type_id": "stick"
+    },
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 433,
+        "channel_offset": 0,
+        "mode": "auto",
+        "output_id": "out1",
+        "port_id": "port1",
+        "universe": 0
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [],
+      "id": "fx2",
+      "length_mm": null,
+      "mute": false,
+      "name": "Стик 2",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "kind": "line",
+        "p1": [
+          200.0,
+          100.0
+        ],
+        "p2": [
+          200.0,
+          620.0
+        ]
+      },
+      "type_id": "stick"
+    },
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 1,
+        "channel_offset": 0,
+        "mode": "auto",
+        "output_id": "out1",
+        "port_id": "port2",
+        "universe": 2
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [],
+      "id": "fx3",
+      "length_mm": null,
+      "mute": false,
+      "name": "Стик 3",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "kind": "line",
+        "p1": [
+          280.0,
+          100.0
+        ],
+        "p2": [
+          280.0,
+          620.0
+        ]
+      },
+      "type_id": "stick"
+    },
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 433,
+        "channel_offset": 0,
+        "mode": "auto",
+        "output_id": "out1",
+        "port_id": null,
+        "universe": 2
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [],
+      "id": "fx4",
+      "length_mm": null,
+      "mute": false,
+      "name": "Лента 4",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "center": [
+          640.0,
+          80.0
+        ],
+        "kind": "rect",
+        "rotation_deg": 0.0,
+        "size": [
+          300.0,
+          20.0
+        ]
+      },
+      "type_id": "strip30"
+    },
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 1,
+        "channel_offset": 0,
+        "mode": "manual",
+        "output_id": "out2",
+        "port_id": null,
+        "universe": 10
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [],
+      "id": "fx5",
+      "length_mm": null,
+      "mute": false,
+      "name": "Стик 5",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "kind": "line",
+        "p1": [
+          400.0,
+          100.0
+        ],
+        "p2": [
+          400.0,
+          620.0
+        ]
+      },
+      "type_id": "stick"
+    },
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 400,
+        "channel_offset": 0,
+        "mode": "manual",
+        "output_id": "out2",
+        "port_id": null,
+        "universe": 10
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [],
+      "id": "fx6",
+      "length_mm": null,
+      "mute": false,
+      "name": "Лента 6",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "center": [
+          640.0,
+          160.0
+        ],
+        "kind": "rect",
+        "rotation_deg": 0.0,
+        "size": [
+          300.0,
+          20.0
+        ]
+      },
+      "type_id": "strip30"
+    },
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 490,
+        "channel_offset": 0,
+        "mode": "auto",
+        "output_id": "out2",
+        "port_id": null,
+        "universe": 10
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [],
+      "id": "fx7",
+      "length_mm": null,
+      "mute": false,
+      "name": "Стик 7",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "kind": "line",
+        "p1": [
+          480.0,
+          100.0
+        ],
+        "p2": [
+          480.0,
+          620.0
+        ]
+      },
+      "type_id": "stick"
+    },
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 500,
+        "channel_offset": 0,
+        "mode": "manual",
+        "output_id": "out2",
+        "port_id": null,
+        "universe": 11
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [],
+      "id": "fx8",
+      "length_mm": null,
+      "mute": false,
+      "name": "Лента 8",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "center": [
+          640.0,
+          240.0
+        ],
+        "kind": "rect",
+        "rotation_deg": 0.0,
+        "size": [
+          300.0,
+          20.0
+        ]
+      },
+      "type_id": "strip30"
+    },
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": 1,
+        "channel_offset": 0,
+        "mode": "auto",
+        "output_id": "out3",
+        "port_id": null,
+        "universe": 1
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [],
+      "id": "fx9",
+      "length_mm": null,
+      "mute": false,
+      "name": "Стик 9",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "kind": "line",
+        "p1": [
+          1000.0,
+          100.0
+        ],
+        "p2": [
+          1000.0,
+          620.0
+        ]
+      },
+      "type_id": "stick"
+    },
+    {
+      "acceptance": "none",
+      "address": {
+        "channel": null,
+        "channel_offset": 0,
+        "mode": "unassigned",
+        "output_id": null,
+        "port_id": null,
+        "universe": null
+      },
+      "brightness": 1.0,
+      "cell_offset": 0,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "direction": "forward",
+      "disabled": [],
+      "every_n": 1,
+      "groups": [],
+      "id": "fx10",
+      "length_mm": null,
+      "mute": false,
+      "name": "Лента 10 без адреса",
+      "sampling": {
+        "along": true,
+        "kind": "point",
+        "size": 0.0,
+        "width": 0.0
+      },
+      "shape": {
+        "center": [
+          640.0,
+          640.0
+        ],
+        "kind": "rect",
+        "rotation_deg": 0.0,
+        "size": [
+          300.0,
+          20.0
+        ]
+      },
+      "type_id": "strip30"
+    }
+  ],
+  "groups": [],
+  "outputs": [
+    {
+      "art_sync": false,
+      "delay_ms": 0.0,
+      "fixture_ids": [
+        "fx4"
+      ],
+      "id": "out1",
+      "ip": "127.0.0.1",
+      "name": "Art-Net 127.0.0.1 порты",
+      "ports": [
+        {
+          "fixture_ids": [
+            "fx1",
+            "fx2"
+          ],
+          "id": "port1",
+          "max_cells": null,
+          "max_universes": null,
+          "new_universe": true,
+          "number": 1
+        },
+        {
+          "fixture_ids": [
+            "fx3"
+          ],
+          "id": "port2",
+          "max_cells": 100,
+          "max_universes": null,
+          "new_universe": true,
+          "number": 2
+        }
+      ],
+      "priority": 100,
+      "protocol": "artnet",
+      "rate_hz": 60.0,
+      "rules": {
+        "auto_span": true,
+        "skip_511_512": false,
+        "whole_pixel": true
+      },
+      "start_universe": 0,
+      "target_kind": "unicast",
+      "universe_count": 8
+    },
+    {
+      "art_sync": false,
+      "delay_ms": 0.0,
+      "fixture_ids": [
+        "fx5",
+        "fx6",
+        "fx7",
+        "fx8"
+      ],
+      "id": "out2",
+      "ip": "127.0.0.2",
+      "name": "Art-Net 127.0.0.2 без 511-512",
+      "ports": [],
+      "priority": 100,
+      "protocol": "artnet",
+      "rate_hz": 60.0,
+      "rules": {
+        "auto_span": true,
+        "skip_511_512": true,
+        "whole_pixel": true
+      },
+      "start_universe": 10,
+      "target_kind": "unicast",
+      "universe_count": null
+    },
+    {
+      "art_sync": false,
+      "delay_ms": 0.0,
+      "fixture_ids": [
+        "fx9"
+      ],
+      "id": "out3",
+      "ip": "127.0.0.3",
+      "name": "sACN unicast 127.0.0.3",
+      "ports": [],
+      "priority": 100,
+      "protocol": "sacn",
+      "rate_hz": 60.0,
+      "rules": {
+        "auto_span": true,
+        "skip_511_512": false,
+        "whole_pixel": true
+      },
+      "start_universe": 1,
+      "target_kind": "unicast",
+      "universe_count": null
+    }
+  ],
+  "schema_version": 1
+}
