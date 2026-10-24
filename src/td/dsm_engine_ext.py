@@ -80,7 +80,7 @@ def rows_to_text(rows: list[list[str]]) -> str:
 
 class DsmEngineExt:
     """Публичные методы (с заглавной — промоутятся на COMP): Reload, LoadPatch, ReportError, ApplyActive, CheckFile,
-    PatchDir, PatchName, ResolvePath, UpdateCounters, SavePatch, AddListener, AddInfoProvider, WriteInfo, SetCounterFilter."""
+    PatchDir, PatchName, ResolvePath, UpdateCounters, SavePatch, AddListener, AddInfoProvider, WriteInfo, CallUser, SetCounterFilter."""
 
     def __init__(self, ownerComp) -> None:
         self.ownerComp = ownerComp
@@ -242,6 +242,11 @@ class DsmEngineExt:
     def AddInfoProvider(self, fn: Callable) -> None:
         """Поставщик дополнительных строк info ``fn() -> [[key, value], ...]`` — дописываются при каждой записи info."""
         self._info_providers = [f for f in self._info_providers if not _same_hook(f, fn)] + [fn]
+
+    def CallUser(self, name: str, *args) -> None:
+        """Вызвать колбэк пользователя из DAT Callbacks (onSelect, onLocate…) — для частей компонента; исключение
+        колбэка печатается в textport и не прерывает вызывающего (как у onPatchLoaded)."""
+        self._call(name, *args)
 
     def WriteInfo(self) -> None:
         """Переписать таблицу info сейчас (внутренние поставщики строк зовут после своих команд)."""
