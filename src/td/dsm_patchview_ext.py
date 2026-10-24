@@ -7,9 +7,13 @@
 """
 from __future__ import annotations
 
+import time
 import traceback
 
 NOT_YET = "не реализовано"
+ROW_COLUMNS = ["index", "output", "universe", "dotted", "declared", "used"]
+TABLES = ("pv_rects", "pv_preview", "pv_zoom", "pv_labels", "pv_rows", "pv_issues", "pv_unassigned", "pv_outputs",
+          "pv_ports", "pv_sheet", "pv_status")
 
 
 class DsmPatchViewExt:
@@ -25,11 +29,16 @@ class DsmPatchViewExt:
         self.selection: tuple[str, ...] = ()   # выбранные фикстуры
         self.undo_doc = None                   # документ файла до последней правки (одна ступень отмены)
         self.message: str = ""
+        self.layout = None                     # MapLayout текущего патча и выхода (для попадания и предпросмотра)
+        self.last_rebuild_ms: float = 0.0      # время последней перестройки таблиц (9.1)
+        self._seen: tuple | None = None        # (патч движка, статус) последней перестройки — ссылка, не id()
+        self._counts = (0, 0)                  # (ошибок, предупреждений) текущего патча — строки info dmx_*
+        self._pending = False                  # перестройка запланирована на следующий кадр
         self._in_par = False                   # защита от повторного входа: метод меняет пару → пара вызывает метод
         eng = ownerComp.ext.DsmEngineExt
         eng.AddListener(self.OnPatchLoaded)
         eng.AddInfoProvider(self._info_rows)
-        eng.WriteInfo()                        # движок уже записал info при своей инициализации — дописать строки dmx_*
+        self._rebuild()                        # таблицы по уже загруженному патчу; пишет и info со строками dmx_*
 
     # ------------------------------------------------------------------ окно и выбор (задачи 2.2, 2.6, 3.1)
     def Open(self) -> None:
@@ -38,11 +47,47 @@ class DsmPatchViewExt:
     def Close(self) -> None:
         self._not_yet("Close")
 
-    def SelectOutput(self, output_id: str | None) -> None:
-        self._not_yet("SelectOutput")
+    def SelectOutput(self, output_id: str | None) -> bool:
+        """Выход карты (``None`` или пусто — все выходы, 2.5). Неизвестный выход — False и сообщение, выбор прежний."""
+        output_id = (output_id or "").strip() or None
+        patch = self._engine().patch
+        if output_id is not None and (patch is None or not any(o.id == output_id for o in patch.outputs)):
+            self.message = f"SelectOutput: нет такого выхода: {output_id}"
+            self._sync_pars(Dmxoutput=self.output_id or "")
+            self._engine().WriteInfo()
+            return False
+        if output_id != self.output_id:
+            self.zoom_row = None
+        self.output_id = output_id
+        self.message = ""
+        self._sync_pars(Dmxoutput=output_id or "")
+        self._rebuild()
+        return True
 
-    def ShowIssue(self, index: int) -> None:
-        self._not_yet("ShowIssue")
+    def ShowIssue(self, index: int) -> bool:
+        """Показать проблему ``index`` (номер строки ``pv_issues`` с 1, 3.2): выход и крупный юниверс её места."""
+        t = self._table("pv_issues")
+        if t is None or not 1 <= index < t.numRows:
+            self.message = f"ShowIssue: нет проблемы {index}"
+            self._engine().WriteInfo()
+            return False
+        out, uni = t[index, "output"].val, t[index, "universe"].val
+        if not out:                                       # проблема по фикстурам — выход первой фикстуры
+            patch = self._engine().patch
+            fids = t[index, "fixture_ids"].val.split()
+            fx = next((f for f in patch.fixtures if fids and f.id == fids[0]), None) if patch else None
+            out = fx.address.output_id if fx is not None and fx.address.output_id else ""
+        if not out and not uni:
+            self.message = f"ShowIssue: у проблемы {index} нет места на карте ({t[index, 'code'].val})"
+            self._rebuild()
+            return True
+        if out and not self.SelectOutput(out):
+            return False
+        if uni and self.layout is not None:
+            self.zoom_row = next((r.index for r in self.layout.rows if str(r.universe) == uni
+                                  and (not out or r.output_id == out)), None)
+            self._rebuild()
+        return True
 
     def Select(self, fixture_ids: list[str]) -> None:
         self._not_yet("Select")
@@ -95,8 +140,12 @@ class DsmPatchViewExt:
 
     # ------------------------------------------------------------------ события
     def OnPatchLoaded(self, patch, issues) -> None:
-        """Слушатель движка: перестройка таблиц карты (задача 2.2). Движок уже записал info с нашими строками."""
-        return
+        """Слушатель движка: перестройка таблиц карты; выбранный выход и крупный юниверс сохраняются, если есть (1.3)."""
+        if self.output_id is not None and not any(o.id == self.output_id for o in patch.outputs):
+            self.output_id = None
+            self.zoom_row = None
+            self._sync_pars(Dmxoutput="")
+        self._rebuild()
 
     def OnMap(self, event: str, u: float, v: float, shift: bool = False) -> None:
         """Обработчик области карты (задачи 3.3–3.4): down / move / up / hover."""
@@ -125,6 +174,92 @@ class DsmPatchViewExt:
         finally:
             self._in_par = False
 
+    # ------------------------------------------------------------------ таблицы (2.2)
+    def _rebuild(self) -> None:
+        """Патч движка → таблицы pv_* (каждая одной записью) → info. Нет патча или ошибка — пустые таблицы (1.4)."""
+        t0 = time.perf_counter()
+        eng, L = self._engine(), self.logic
+        self._pending = False
+        self._seen = (eng.patch, eng.status)
+        patch = eng.patch if eng.status == "ok" else None
+        if patch is None:
+            self.layout = None
+            self._counts = (0, 0)
+            for name, header in self._headers().items():      # пустая таблица = только заголовок (листеры, инстансинг)
+                self._write(name, [header])
+            self._write("pv_status", self._status_rows(eng, 0, 0))
+            self.last_rebuild_ms = (time.perf_counter() - t0) * 1000.0
+            eng.WriteInfo()
+            return
+        segs = eng.api.segments_by_fixture(patch)
+        issues = list(eng.issues)
+        geom = L.Geom()
+        self.layout = layout = L.map_layout(patch, segs, issues, self.output_id)
+        if self.zoom_row is not None and not 0 <= self.zoom_row < len(layout.rows):
+            self.zoom_row = None
+        sel = set(self.selection)
+        self._write("pv_rects", L.map_rects(layout, sel, geom))
+        self._write("pv_preview", [L.RECT_COLUMNS])
+        self._write("pv_zoom", L.zoom_rects(layout, self.zoom_row, geom, sel) if self.zoom_row is not None else [L.RECT_COLUMNS])
+        self._write("pv_labels", L.label_rows(layout, geom))
+        self._write("pv_rows", [ROW_COLUMNS] + [[str(r.index), r.output_id, str(r.universe), r.dotted,
+                                                  "1" if r.declared else "0", str(r.used_channels)] for r in layout.rows])
+        self._write("pv_issues", L.issue_rows(issues))
+        self._write("pv_unassigned", L.unassigned_rows(patch, segs))
+        self._write("pv_outputs", L.output_rows(patch, segs, issues))
+        port_out = self.output_id or (patch.outputs[0].id if patch.outputs else None)
+        self._write("pv_ports", L.port_rows(patch, port_out) if port_out else [L.PORT_COLUMNS])
+        self._write("pv_sheet", L.sheet_rows(patch, self.output_id))
+        errors = sum(1 for i in issues if i.level.value == "error")
+        self._counts = (errors, len(issues) - errors)
+        self._write("pv_status", self._status_rows(eng, errors, len(issues) - errors))
+        self.last_rebuild_ms = (time.perf_counter() - t0) * 1000.0
+        eng.WriteInfo()
+
+    def _headers(self) -> dict[str, list[str]]:
+        L = self.logic
+        rect = L.RECT_COLUMNS
+        sheet = self._engine().api.address_table(self._engine().api.new_patch())[0]
+        return {"pv_rects": rect, "pv_preview": rect, "pv_zoom": rect, "pv_labels": L.LABEL_COLUMNS, "pv_rows": ROW_COLUMNS,
+                "pv_issues": L.ISSUE_COLUMNS, "pv_unassigned": L.UNASSIGNED_COLUMNS, "pv_outputs": L.OUTPUT_COLUMNS,
+                "pv_ports": L.PORT_COLUMNS, "pv_sheet": sheet}
+
+    def _deferred_rebuild(self) -> None:
+        """Отложенная перестройка из _info_rows: лишняя, если слушатель загрузки уже перестроил в этом кадре."""
+        eng = self._engine()
+        if self._pending and self._seen != (eng.patch, eng.status):
+            self._rebuild()
+        self._pending = False
+
+    def _status_rows(self, eng, errors: int, warnings: int) -> list[list[str]]:
+        return [["key", "value"], ["status", eng.status], ["output", self.output_id or "all"],
+                ["zoom_row", "" if self.zoom_row is None else str(self.zoom_row)], ["errors", str(errors)],
+                ["warnings", str(warnings)], ["selection", " ".join(self.selection)], ["message", self.message or eng.message]]
+
+    def _table(self, name: str):
+        return self.ownerComp.op("tables").op(name)
+
+    def _write(self, name: str, rows: list[list[str]]) -> None:
+        """Таблица tables/<name> одной записью; создаётся при первом обращении (сетка как у таблиц движка)."""
+        tables = self.ownerComp.op("tables")
+        d = tables.op(name)
+        if d is None:
+            d = tables.create(tableDAT, name)  # noqa: F821 — глобал TouchDesigner
+            k = len(tables.children) - 1
+            d.nodeX, d.nodeY = (k % 5) * 200, -(k // 5) * 130
+            d.viewer = True
+        d.text = "\n".join("\t".join(str(c) for c in r) for r in rows)
+
+    def _sync_pars(self, **values) -> None:
+        """Пары страницы Dmx отражают состояние; запись из метода не должна снова вызвать метод."""
+        was, self._in_par = self._in_par, True
+        try:
+            for name, v in values.items():
+                if self.ownerComp.par[name].eval() != v:
+                    self.ownerComp.par[name] = v
+        finally:
+            self._in_par = was
+
     # ------------------------------------------------------------------ служебное
     def _engine(self):
         return self.ownerComp.ext.DsmEngineExt
@@ -135,5 +270,12 @@ class DsmPatchViewExt:
         return False
 
     def _info_rows(self) -> list[list[str]]:
+        # Движок зовёт слушателей только после успешной загрузки; пустой Patchfile и ошибка загрузки меняют только статус.
+        # Info пишется на каждое такое событие — по нему и замечаем смену и перестраиваем таблицы следующим кадром (1.4).
+        eng = self._engine()
+        if self._seen is not None and (self._seen[0] is not eng.patch or self._seen[1] != eng.status) and not self._pending:
+            self._pending = True
+            run("args[0]._deferred_rebuild()", self, delayFrames=1)  # noqa: F821 — глобал TD; без строки пути
         return [["dmx_output", self.output_id or "all"], ["dmx_selection", " ".join(self.selection)],
-                ["dmx_message", self.message]]
+                ["dmx_message", self.message], ["dmx_errors", str(self._counts[0])], ["dmx_warnings", str(self._counts[1])],
+                ["dmx_rebuild_ms", f"{self.last_rebuild_ms:.1f}"]]
