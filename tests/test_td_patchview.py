@@ -706,3 +706,132 @@ def test_preview_and_apply_address_share_the_trial_patch():
     mine = [i for i in api.validate(after) if "fx2" in i.fixture_ids
             or (not i.fixture_ids and i.output_id == "out1" and i.universe in {s.universe for s in res.segments})]
     assert list(res.issues) == mine
+
+
+# ---------- 1.7 чистые строки списков и лист адресов (3.3, 7.1, 10.1) ----------
+import csv
+import io
+
+
+def test_issue_rows_follow_issue_table_errors_first():
+    patch, _, issues = _load(PATCHVIEW_TEST)
+    rows = pv.issue_rows(issues)
+    assert rows[0] == ["n", "level", "code", "message", "fixture_ids", "output", "universe", "channels"]
+    table = api.issue_table(patch)[1:]
+    assert len(rows) - 1 == len(table) == 4
+    assert [r[0] for r in rows[1:]] == ["1", "2", "3", "4"]
+    assert [(r[1], r[2], r[3]) for r in rows[1:]] == [(t[0], t[1], t[2]) for t in table]
+    levels = [r[1] for r in rows[1:]]
+    assert levels == sorted(levels, key=lambda v: v != "error")                        # ошибки раньше предупреждений
+    by_code = {r[2]: r for r in rows[1:]}
+    assert by_code["channel_overlap"][4:] == ["fx5 fx6", "out2", "10", "400-432"]
+    assert by_code["port_limit"][4:] == ["fx3", "out1", "", ""]
+    assert by_code["unassigned"][4:] == ["fx10", "", "", ""]
+    assert by_code["cell_on_boundary"][4:] == ["fx8", "out2", "11", ""]
+    assert all(len(r) == len(rows[0]) for r in rows)
+    assert pv.issue_rows([]) == [rows[0]]
+
+
+def test_issue_rows_sorts_unsorted_input():
+    _, _, issues = _load(PATCHVIEW_TEST)
+    rows = pv.issue_rows(list(reversed(issues)))
+    assert [r[1] for r in rows[1:]] == ["error", "error", "warning", "warning"]
+    assert [r[0] for r in rows[1:]] == ["1", "2", "3", "4"]
+
+
+def test_unassigned_rows_is_fx10():
+    patch, segs, _ = _load(PATCHVIEW_TEST)
+    rows = pv.unassigned_rows(patch, segs)
+    fx10 = api.address_table(patch)[-1]
+    assert rows == [["id", "name", "type", "cells"], ["fx10", fx10[1], fx10[2], "30"]]
+
+
+def test_unassigned_rows_examples_empty_and_patch_order():
+    for path in EXAMPLES:
+        patch, segs, _ = _load(path)
+        assert pv.unassigned_rows(patch, segs) == [["id", "name", "type", "cells"]]
+    patch, segs, _ = _load(PATCHVIEW_TEST)
+    segs = {k: ([] if k in ("fx7", "fx2") else v) for k, v in segs.items()}
+    assert [r[0] for r in pv.unassigned_rows(patch, segs)[1:]] == ["fx2", "fx7", "fx10"]
+
+
+OUTPUT_HEAD = ["id", "name", "protocol", "target", "ip", "start", "count", "used", "fixtures", "cells", "errors", "warnings"]
+
+
+def test_output_rows_summaries():
+    patch, segs, issues = _load(PATCHVIEW_TEST)
+    rows = pv.output_rows(patch, segs, issues)
+    assert rows[0] == OUTPUT_HEAD
+    assert [r[0] for r in rows[1:]] == ["out1", "out2", "out3"]
+    o1, o2, o3 = rows[1:]
+    assert o1[1] == patch.outputs[0].name
+    assert o1[2:] == ["artnet", "unicast", "127.0.0.1", "0", "8", "4", "4", str(144 * 3 + 30), "1", "0"]
+    assert o2[2:] == ["artnet", "unicast", "127.0.0.2", "10", "", "3", "4", str(144 * 2 + 30 * 2), "1", "1"]
+    assert o3[2:] == ["sacn", "unicast", "127.0.0.3", "1", "", "1", "1", "144", "0", "0"]
+    for r, out in zip(rows[1:], patch.outputs):
+        s = pv.output_summary(patch, segs, out.id)
+        assert (r[7], r[8], r[9]) == (str(s["universes_used"]), str(s["fixtures"]), str(s["cells"]))
+
+
+def test_output_rows_count_issue_by_fixture_without_output_id():
+    patch, segs, issues = _load(PATCHVIEW_TEST)
+    moved = [replace(i, output_id=None) if i.code == api.IssueCode.CHANNEL_OVERLAP else i for i in issues]
+    rows = pv.output_rows(patch, segs, moved)
+    assert rows[2][10:] == ["1", "1"]                                                   # по фикстурам fx5/fx6 выхода out2
+    assert rows[1][10:] == ["1", "0"] and rows[3][10:] == ["0", "0"]
+
+
+def test_output_rows_examples_one_row_per_output():
+    for path in EXAMPLES:
+        patch, segs, issues = _load(path)
+        rows = pv.output_rows(patch, segs, issues)
+        assert [r[0] for r in rows[1:]] == [o.id for o in patch.outputs]
+        assert all(len(r) == len(OUTPUT_HEAD) for r in rows)
+        assert sum(int(r[9]) for r in rows[1:]) == sum(s.n_cells for v in segs.values() for s in v)
+
+
+def test_port_rows_chains():
+    patch, _, _ = _load(PATCHVIEW_TEST)
+    assert pv.port_rows(patch, "out1") == [
+        ["port", "number", "new_universe", "max_cells", "max_universes", "chain"],
+        ["port1", "1", "1", "", "", "fx1 fx2"],
+        ["port2", "2", "1", "100", "", "fx3"]]
+    assert pv.port_rows(patch, "out2") == [["port", "number", "new_universe", "max_cells", "max_universes", "chain"]]
+    with pytest.raises(KeyError):
+        pv.port_rows(patch, "nope")
+
+
+def test_port_rows_examples():
+    for path in EXAMPLES:
+        patch, _, _ = _load(path)
+        for out in patch.outputs:
+            rows = pv.port_rows(patch, out.id)
+            assert [r[0] for r in rows[1:]] == [p.id for p in out.ports]
+            assert [r[5].split() for r in rows[1:]] == [list(p.fixture_ids) for p in out.ports]
+
+
+def test_sheet_rows_is_address_table_and_filters_by_output():
+    for path in ALL_PATCHES:
+        patch, _, _ = _load(path)
+        assert pv.sheet_rows(patch) == api.address_table(patch)
+    patch, _, _ = _load(PATCHVIEW_TEST)
+    full = api.address_table(patch)
+    out2 = pv.sheet_rows(patch, output_id="out2")
+    assert out2[0] == full[0]
+    assert [r[0] for r in out2[1:]] == ["fx5", "fx6", "fx7", "fx8"]
+    assert out2[1:] == [r for r in full[1:] if r[0] in {"fx5", "fx6", "fx7", "fx8"}]
+    assert pv.sheet_rows(patch, output_id="nope") == [full[0]]
+
+
+def test_sheet_csv_round_trip():
+    patch, _, _ = _load(PATCHVIEW_TEST)
+    rows = pv.sheet_rows(patch)
+    rows = rows + [["x1", "1.5", "тип; с точкой", 'с "кавычками"', "artnet", "1", "0.0.1", "1", "3", "9", "1:1-9", "auto", "none"]]
+    text = pv.sheet_csv(rows)
+    assert isinstance(text, str)
+    assert text.splitlines()[0] == ";".join(api.address_table(patch)[0])
+    assert "1.5" in text and "1,5" not in text
+    back = list(csv.reader(io.StringIO(text), delimiter=";"))
+    assert back == rows
+    assert list(csv.reader(io.StringIO(text.encode("utf-8").decode("utf-8")), delimiter=";")) == rows   # UTF-8
+    assert any(ord(ch) > 127 for r in back[1:-1] for c in r for ch in c)                 # кириллица имён патча

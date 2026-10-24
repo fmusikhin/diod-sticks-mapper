@@ -12,10 +12,13 @@ import zlib
 from dataclasses import dataclass, field
 
 from dsm_core.addressing import Segment, auto_assign_all, fixture_segments
+from dsm_core.cells import cell_count
+from dsm_core.csv_io import CsvDialect, rows_to_csv
 from dsm_core.errors import PatchError
 from dsm_core.model import Patch, get_fixture, get_fixture_type
 from dsm_core.ops import set_manual_address
 from dsm_core.protocol import ARTNET_MAX, Protocol, dotted, format_universe
+from dsm_core.tables import address_table
 from dsm_core.validate import validate
 from dsm_core.validate_types import Issue, IssueLevel
 
@@ -481,3 +484,83 @@ def output_summary(patch: Patch, segments: dict[str, list[Segment]], output_id: 
     declared = out.universe_count if out is not None and out.universe_count is not None else used
     return {"universes_used": used, "universes_declared": declared,
             "channels_used": sum(_union_len(v) for v in spans.values()), "fixtures": len(own), "cells": cells}
+
+
+# ---------- строки списков и лист адресов (3.2, 3.3, 5.x, 7.1, 7.2) ----------
+
+ISSUE_COLUMNS = ["n", "level", "code", "message", "fixture_ids", "output", "universe", "channels"]
+UNASSIGNED_COLUMNS = ["id", "name", "type", "cells"]
+OUTPUT_COLUMNS = ["id", "name", "protocol", "target", "ip", "start", "count", "used", "fixtures", "cells", "errors",
+                  "warnings"]
+PORT_COLUMNS = ["port", "number", "new_universe", "max_cells", "max_universes", "chain"]
+SHEET_DIALECT = CsvDialect(";", ".")      # «;» без замены точки: имена вида «1.5» не портятся (как dsm_locate)
+
+
+def _str(x) -> str:
+    return "" if x is None else str(x)
+
+
+def issue_rows(issues: list[Issue]) -> Rows:
+    """``pv_issues``: номер с 1, уровень, код, текст, фикстуры через пробел и подсказка перехода (выход, юниверс,
+    каналы ``a-b``; пусто, если нет). Ошибки раньше предупреждений; внутри уровня порядок входа (как ``validate``)."""
+    ordered = sorted(issues, key=lambda i: i.level != IssueLevel.ERROR)
+    rows = [ISSUE_COLUMNS[:]]
+    for n, i in enumerate(ordered, 1):
+        rows.append([str(n), i.level.value, i.code.value, i.message, " ".join(i.fixture_ids), i.output_id or "",
+                     _str(i.universe), f"{i.channels[0]}-{i.channels[1]}" if i.channels else ""])
+    return rows
+
+
+def unassigned_rows(patch: Patch, segments: dict[str, list[Segment]]) -> Rows:
+    """``pv_unassigned``: фикстуры без сегментов (не размещены на карте) в порядке патча; тип — имя профиля."""
+    types = {t.id: t for t in patch.fixture_types}
+    rows = [UNASSIGNED_COLUMNS[:]]
+    for fx in patch.fixtures:
+        if segments.get(fx.id):
+            continue
+        ft = types.get(fx.type_id)
+        rows.append([fx.id, fx.name, ft.name if ft else fx.type_id, str(cell_count(ft, fx)) if ft else "0"])
+    return rows
+
+
+def output_rows(patch: Patch, segments: dict[str, list[Segment]], issues: list[Issue]) -> Rows:
+    """``pv_outputs``: строка на выход в порядке патча; ``count`` — заявленный ``universe_count`` (пусто, если не
+    задан), ``used``/``fixtures``/``cells`` — из ``output_summary``; ``errors``/``warnings`` — проблемы выхода
+    (по ``output_id`` или по его фикстурам), каждая один раз."""
+    owner = {fx.id: fx.address.output_id for fx in patch.fixtures}
+    rows = [OUTPUT_COLUMNS[:]]
+    for out in patch.outputs:
+        s = output_summary(patch, segments, out.id)
+        mine = [i for i in issues if i.output_id == out.id or any(owner.get(f) == out.id for f in i.fixture_ids)]
+        rows.append([out.id, out.name, out.protocol.value, out.target_kind.value, out.ip or "", str(out.start_universe),
+                     _str(out.universe_count), str(s["universes_used"]), str(s["fixtures"]), str(s["cells"]),
+                     str(sum(i.level == IssueLevel.ERROR for i in mine)),
+                     str(sum(i.level == IssueLevel.WARNING for i in mine))])
+    return rows
+
+
+def port_rows(patch: Patch, output_id: str) -> Rows:
+    """``pv_ports``: порты выхода в порядке патча, ``chain`` — фикстуры порта через пробел в порядке цепочки.
+    Неизвестный выход → ``KeyError``."""
+    out = next((o for o in patch.outputs if o.id == output_id), None)
+    if out is None:
+        raise KeyError(output_id)
+    rows = [PORT_COLUMNS[:]]
+    for p in out.ports:
+        rows.append([p.id, str(p.number), "1" if p.new_universe else "0", _str(p.max_cells), _str(p.max_universes),
+                     " ".join(p.fixture_ids)])
+    return rows
+
+
+def sheet_rows(patch: Patch, output_id: str | None = None) -> Rows:
+    """``pv_sheet``: ``address_table`` ядра как есть; ``output_id`` — только фикстуры этого выхода (порядок патча)."""
+    rows = address_table(patch)
+    if output_id is None:
+        return rows
+    ids = {fx.id for fx in patch.fixtures if fx.address.output_id == output_id}   # по id — не по порядку строк ядра
+    return [rows[0]] + [r for r in rows[1:] if r[0] in ids]
+
+
+def sheet_csv(rows: Rows) -> str:
+    """CSV листа адресов: разделитель ``;``, строка для записи в UTF-8 — писатель ядра ``rows_to_csv``."""
+    return rows_to_csv(rows, SHEET_DIALECT)
