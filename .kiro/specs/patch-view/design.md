@@ -280,7 +280,9 @@ def label_rows(layout, geom: Geom) -> list[list[str]]: ...                      
 def fixture_color(fixture_id: str) -> tuple[float, float, float]: ...              # стабильный хэш
 def hit(layout, u: float, v: float) -> Hit: ...                                     # Hit(row|None, channel|None, segment|None)
 def drop_address(layout, patch, fixture_id, row: int, channel: int, snap: bool) -> tuple[str, int, int]: ...   # (output_id, universe, channel)
-def preview(patch, fixture_id, output_id, universe, channel) -> Preview: ...       # Preview(segments, issues, error|None) по пробному патчу
+def preview(layout, patch, fixture_id, output_id, universe, channel, geom=Geom()) -> Preview: ...
+                                                                                    # Preview(segments, issues, error|None, rects) по пробному патчу
+def apply_address(patch, fixture_id, output_id, universe, channel) -> Patch: ...   # set_manual_address + auto_assign_all — edit для SavePatch
 def shifted(before: Patch, after: Patch) -> list[str]: ...                          # фикстуры, у которых изменился адрес
 def output_rows(patch, segments, issues) -> list[list[str]]: ...                   # pv_outputs: id name protocol target ip start count used fixtures cells errors
 def port_rows(patch, output_id) -> list[list[str]]: ...                            # pv_ports: port number new_universe max_cells max_universes chain

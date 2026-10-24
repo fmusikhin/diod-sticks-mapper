@@ -534,3 +534,175 @@ def test_drop_address_from_grab_offset_is_from_fixture_address_not_segment():
     assert pv.drop_address_from_grab(layout, patch, "fx2", grab0, 439.5 / 512, v0, False) == ("out1", 0, 433)
     # фикстуры нет в раскладке (не размещена) — смещение 0
     assert pv.drop_address_from_grab(layout, patch, "fx10", grab2, 99.5 / 512, v1, False) == ("out1", 1, 100)
+
+
+# ---------- 1.6 чистый предпросмотр и сдвинувшиеся адреса (4.3, 4.8, 10.1) ----------
+
+def _addr(patch):
+    return {f.id: (f.address.output_id, f.address.universe, f.address.channel, f.address.mode) for f in patch.fixtures}
+
+
+def _fx(patch, fid):
+    return next(f for f in patch.fixtures if f.id == fid)
+
+
+def test_preview_free_spot_matches_layout_fixture_and_rects_by_row():
+    patch, layout = _layout()
+    geom = pv.Geom()
+    res = pv.preview(layout, patch, "fx1", "out1", 4, 1, geom)
+    assert isinstance(res, pv.Preview) and res.error is None
+    out1 = patch.outputs[0]
+    ft = next(t for t in patch.fixture_types if t.id == "stick")
+    assert list(res.segments) == api.layout_fixture(ft, _fx(patch, "fx1"), out1, 4, 1)
+    assert res.segments[0].universe == 4 and res.segments[0].last_channel == 432
+    assert res.issues == ()
+    assert res.rects[0] == pv.RECT_COLUMNS
+    body = res.rects[1:]
+    n = len(layout.rows)
+    r4 = _row(layout, "out1", 4)
+    assert len(body) == 1
+    assert body[0] == ([_f(0), _f(1 - (r4.index + 1) / n), _f(432 * CH), _f(1 / n)]
+                       + [_f(c) for c in pv.fixture_color("fx1")] + [_f(0.6), "1", "cells", "fx1"])
+    with pytest.raises(Exception):
+        res.error = "x"                                                                  # frozen
+
+
+def test_preview_over_other_fixture_reports_overlap_and_error_outline():
+    patch, layout = _layout()
+    geom = pv.Geom()
+    res = pv.preview(layout, patch, "fx1", "out2", 10, 1, geom)
+    assert res.error is None
+    assert [(s.universe, s.first_channel, s.last_channel) for s in res.segments] == [(10, 1, 432)]
+    codes = [(i.code, i.fixture_ids) for i in res.issues]
+    assert (api.IssueCode.CHANNEL_OVERLAP, ("fx1", "fx5")) in codes
+    assert (api.IssueCode.CHANNEL_OVERLAP, ("fx1", "fx6")) in codes
+    # только касающиеся fx1: наложение fx5/fx6 между собой, port_limit fx3 и unassigned fx10 — нет
+    assert all("fx1" in i.fixture_ids or (not i.fixture_ids and i.output_id == "out2" and i.universe == 10)
+               for i in res.issues)
+    assert not [i for i in res.issues if i.fixture_ids == ("fx5", "fx6")]
+    body = res.rects[1:]
+    n = len(layout.rows)
+    r10 = _row(layout, "out2", 10)
+    seg = [r for r in body if r[8] == "1"]
+    issue = [r for r in body if r[8] == "2"]
+    assert len(seg) == 1 and seg[0][1] == _f(1 - (r10.index + 1) / n) and seg[0][7] == _f(0.6)
+    assert len(issue) == 1 and issue[0][:4] == seg[0][:4]
+    assert issue[0][4:7] == [_f(c) for c in geom.error_color] and issue[0][9:] == ["issue", "fx1"]
+    assert [int(r[8]) for r in body] == sorted(int(r[8]) for r in body)
+
+
+def test_preview_impossible_address_is_error_not_exception():
+    patch, layout = _layout()
+    res = pv.preview(layout, patch, "fx1", "out1", 1, 600)
+    assert res.error and "600" in res.error
+    assert res.segments == () and res.issues == () and res.rects == []
+    # auto_span выключен — стик 432 каналов с 400-го не помещается (LayoutError ядра)
+    out1 = replace(patch.outputs[0], rules=replace(patch.outputs[0].rules, auto_span=False))
+    p2 = replace(patch, outputs=(out1,) + patch.outputs[1:])
+    res2 = pv.preview(layout, p2, "fx1", "out1", 1, 400)
+    assert res2.error and "fx1" in res2.error and res2.segments == () and res2.rects == []
+    # неизвестная фикстура / выход и юниверс вне диапазона протокола — тоже результат
+    assert pv.preview(layout, patch, "nope", "out1", 1, 1).error
+    assert pv.preview(layout, patch, "fx1", "nope", 1, 1).error
+    assert pv.preview(layout, patch, "fx1", "out3", 0, 1).error                            # sACN от 1
+    assert pv.preview(layout, patch, "fx1", "out1", 40000, 1).error                        # Art-Net до 32767
+
+
+def test_preview_to_output_of_other_protocol():
+    patch, layout = _layout()
+    res = pv.preview(layout, patch, "fx1", "out3", 1, 1)                                   # Art-Net → sACN
+    assert res.error is None
+    assert [(s.universe, s.first_channel, s.last_channel) for s in res.segments] == [(1, 1, 432)]
+    assert res.issues == ()                                                                # fx9 — auto, ядро сдвинуло его
+    assert "fx9" in pv.shifted(patch, pv.apply_address(patch, "fx1", "out3", 1, 1))
+    n = len(layout.rows)
+    r3 = _row(layout, "out3", 1)
+    assert [r[1] for r in res.rects[1:]] == [_f(1 - (r3.index + 1) / n)]
+    # fx9 ручной — наложение
+    pm = api.set_manual_address(patch, "fx9", "out3", 1, 1)
+    res_m = pv.preview(layout, pm, "fx1", "out3", 1, 1)
+    assert {i.code for i in res_m.issues} == {api.IssueCode.CHANNEL_OVERLAP}
+    assert all("fx1" in i.fixture_ids for i in res_m.issues)
+    assert [r[1] for r in res_m.rects[1:]] == [_f(1 - (r3.index + 1) / n)] * 2
+    # по строкам раскладки только нужного выхода предпросмотр чужого выхода прямоугольников не даёт
+    _, l2 = _layout(output_id="out2")
+    res2 = pv.preview(l2, patch, "fx1", "out3", 1, 1)
+    assert res2.segments and res2.rects == [pv.RECT_COLUMNS]
+
+
+def test_preview_universe_outside_layout_rows_keeps_segments_without_rects():
+    patch, layout = _layout()
+    res = pv.preview(layout, patch, "fx1", "out3", 50, 1)
+    assert res.error is None and [s.universe for s in res.segments] == [50]
+    assert res.rects == [pv.RECT_COLUMNS]
+    n = len(layout.rows)
+    # стик fx5 с 433 юниверса 12 (out2 без universe_count) — хвост уйдёт в 13-й, которого нет в строках:
+    # сегментов два, прямоугольник слоя 1 — один
+    res2 = pv.preview(layout, patch, "fx5", "out2", 12, 433)
+    assert res2.error is None and [s.universe for s in res2.segments] == [12, 13]
+    seg = [r for r in res2.rects[1:] if r[8] == "1"]
+    assert len(seg) == 1 and seg[0][10] == "fx5" and seg[0][1] == _f(1 - (_row(layout, "out2", 12).index + 1) / n)
+    # у out1 заявлено 8 юниверсов — за 7-й ядро не пускает: это ошибка, не пустые сегменты
+    res3 = pv.preview(layout, patch, "fx2", "out1", 7, 433)
+    assert res3.error and res3.segments == () and res3.rects == []
+
+
+def test_preview_multi_universe_segments_give_rect_per_row():
+    patch, layout = _layout()
+    res = pv.preview(layout, patch, "fx1", "out1", 5, 433)
+    assert [(s.universe, s.first_channel, s.last_channel) for s in res.segments] == [(5, 433, 510), (6, 1, 354)]
+    n = len(layout.rows)
+    body = res.rects[1:]
+    seg = [r for r in body if r[8] == "1"]
+    assert [(r[0], r[1], r[2]) for r in seg] == [
+        (_f(432 * CH), _f(1 - (_row(layout, "out1", 5).index + 1) / n), _f(78 * CH)),
+        (_f(0), _f(1 - (_row(layout, "out1", 6).index + 1) / n), _f(354 * CH))]
+    # ячейка на границе юниверса (ядро: cell_on_boundary для fx1) — жёлтая обводка на обоих сегментах
+    assert {i.code for i in res.issues} == {api.IssueCode.CELL_ON_BOUNDARY}
+    issue = [r for r in body if r[8] == "2"]
+    assert [r[:4] for r in issue] == [r[:4] for r in seg]
+    assert all(r[4:7] == [_f(c) for c in pv.Geom().warning_color] for r in issue)
+
+
+def test_apply_address_and_shifted_track_auto_neighbours():
+    patch, _ = _layout()
+    after = pv.apply_address(patch, "fx2", "out1", 1, 1)
+    a2 = _fx(after, "fx2").address
+    assert (a2.mode, a2.output_id, a2.universe, a2.channel) == (api.AddressMode.MANUAL, "out1", 1, 1)
+    assert api.auto_assign_all(after)[0] == after                                           # авто уже пересчитаны
+    before_a, after_a = _addr(patch), _addr(after)
+    expected = [f.id for f in after.fixtures if before_a[f.id] != after_a[f.id]]
+    assert pv.shifted(patch, after) == expected
+    assert expected[0] == "fx2" and len(expected) > 1                                        # соседи сдвинулись
+    assert set(expected) == {"fx2", "fx3", "fx4"}
+    # тот же адрес — ничего не сдвинулось
+    same = pv.apply_address(patch, "fx5", "out2", 10, 1)
+    assert pv.shifted(patch, same) == []
+    assert pv.shifted(patch, patch) == []
+    # ручной адрес, равный текущему авто: сам fx1 меняет режим → в списке, соседи нет
+    manual_same = pv.apply_address(patch, "fx1", "out1", 0, 1)
+    assert pv.shifted(patch, manual_same) == ["fx1"]
+    # ошибки ядра из apply_address — исключение (правка, не предпросмотр)
+    with pytest.raises(api.OperationError):
+        pv.apply_address(patch, "fx1", "out1", 1, 600)
+
+
+def test_shifted_includes_added_and_removed_fixtures_in_after_order():
+    patch, _ = _layout()
+    removed = api.remove_fixture(patch, "fx10")
+    assert pv.shifted(patch, removed) == ["fx10"]
+    assert pv.shifted(removed, patch) == ["fx10"]
+    # добавленная + сдвинутая: порядок патча after
+    after = pv.apply_address(removed, "fx2", "out1", 1, 1)
+    assert pv.shifted(patch, after) == ["fx2", "fx3", "fx4", "fx10"]
+
+
+def test_preview_and_apply_address_share_the_trial_patch():
+    """Предпросмотр считается по тому же пробному патчу, что и реальная правка."""
+    patch, layout = _layout()
+    res = pv.preview(layout, patch, "fx2", "out1", 1, 1)
+    after = pv.apply_address(patch, "fx2", "out1", 1, 1)
+    assert list(res.segments) == api.fixture_segments(after, _fx(after, "fx2"))
+    mine = [i for i in api.validate(after) if "fx2" in i.fixture_ids
+            or (not i.fixture_ids and i.output_id == "out1" and i.universe in {s.universe for s in res.segments})]
+    assert list(res.issues) == mine

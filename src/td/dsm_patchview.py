@@ -11,9 +11,12 @@ import colorsys
 import zlib
 from dataclasses import dataclass, field
 
-from dsm_core.addressing import Segment
+from dsm_core.addressing import Segment, auto_assign_all, fixture_segments
+from dsm_core.errors import PatchError
 from dsm_core.model import Patch, get_fixture, get_fixture_type
+from dsm_core.ops import set_manual_address
 from dsm_core.protocol import ARTNET_MAX, Protocol, dotted, format_universe
+from dsm_core.validate import validate
 from dsm_core.validate_types import Issue, IssueLevel
 
 Rows = list[list[str]]
@@ -83,6 +86,17 @@ class Hit:
 
 
 NO_HIT = Hit(None, None, None, None)
+
+
+@dataclass(frozen=True)
+class Preview:
+    """Предпросмотр адреса (4.3): сегменты фикстуры по пробному патчу, проблемы пробного патча, задевающие её,
+    текст ошибки ядра (адрес невозможен — тогда сегментов и прямоугольников нет) и строки ``pv_preview``."""
+
+    segments: tuple[Segment, ...]
+    issues: tuple[Issue, ...]
+    error: str | None
+    rects: Rows = field(default_factory=list)
 
 
 # ---------- цвет фикстуры (2.6) ----------
@@ -371,6 +385,84 @@ def drop_address_from_grab(layout: MapLayout, patch: Patch, fixture_id: str, gra
         row = max(0, min(len(layout.rows) - 1, first.row + (cur.row - grab.row)))
         channel = first.first_channel + (cur.channel - grab.channel)
     return drop_address(layout, patch, fixture_id, row, channel, snap)
+
+
+# ---------- предпросмотр и сдвинувшиеся адреса (4.3, 4.8) ----------
+
+PREVIEW_ALPHA = 0.6
+
+
+def apply_address(patch: Patch, fixture_id: str, output_id: str, universe: int, channel: int) -> Patch:
+    """Правка адреса одним кодом для предпросмотра и реальной записи (``edit`` для ``SavePatch``): ручной адрес
+    ``set_manual_address`` и пересчёт авто-соседей ``auto_assign_all``. Ошибки ядра — наружу (``OperationError``)."""
+    trial = set_manual_address(patch, fixture_id, output_id, universe, channel)
+    return auto_assign_all(trial)[0]
+
+
+def _concerns(fixture_id: str, output_id: str, segs: list[Segment], issues: list[Issue]) -> tuple[Issue, ...]:
+    """Проблемы, касающиеся фикстуры: названа в ``fixture_ids`` — или проблема без фикстур про юниверс выхода,
+    где лежит её сегмент (с пересечением каналов, если они указаны)."""
+    def mine(iss: Issue) -> bool:
+        if iss.fixture_ids:
+            return fixture_id in iss.fixture_ids
+        return any(_issue_level(fixture_id, output_id, s, [iss]) for s in segs)
+
+    return tuple(iss for iss in issues if mine(iss))
+
+
+def _preview_rects(layout: MapLayout, fixture_id: str, output_id: str, segs: list[Segment], level: str,
+                   geom: Geom) -> Rows:
+    """Строки ``pv_preview`` по строкам текущей раскладки: слой 1 — сегменты цветом фикстуры с ``PREVIEW_ALPHA``,
+    слой 2 — обводка по уровню проблемы. Сегмент в юниверсе, которого нет в строках карты, не рисуется."""
+    n = len(layout.rows)
+    rh = 1.0 / n if n else 1.0
+    ch = 1.0 / DMX_CHANNELS
+    row_of = {(r.output_id, r.universe): r.index for r in layout.rows}
+    color = fixture_color(fixture_id)
+    col = _level_color(level, geom)
+    layer1: Rows = []
+    layer2: Rows = []
+    for s in segs:
+        row = row_of.get((output_id, s.universe))
+        if row is None:
+            continue
+        x, y, w = (s.first_channel - 1) * ch, 1.0 - (row + 1) * rh, (s.last_channel - s.first_channel + 1) * ch
+        layer1.append(_rect(x, y, w, rh, color, PREVIEW_ALPHA, 1, s.kind, fixture_id))
+        if col is not None:
+            layer2.append(_rect(x, y, w, rh, col, 1.0, 2, "issue", fixture_id))
+    return [RECT_COLUMNS[:]] + layer1 + layer2
+
+
+def preview(layout: MapLayout, patch: Patch, fixture_id: str, output_id: str, universe: int, channel: int,
+            geom: Geom = Geom()) -> Preview:
+    """Предпросмотр пробного адреса (4.3): пробный патч ``apply_address`` → сегменты фикстуры ``fixture_segments`` →
+    ``validate`` → проблемы, задевающие фикстуру, и прямоугольники по текущей раскладке. Ошибка ядра
+    (``OperationError``, ``LayoutError``, ``ValueError``…) — ``Preview(error=текст)`` без исключения."""
+    try:
+        trial = apply_address(patch, fixture_id, output_id, universe, channel)
+        fx = get_fixture(trial, fixture_id)
+        segs = fixture_segments(trial, fx)
+        issues = validate(trial)
+    except (PatchError, ValueError, KeyError) as e:
+        return Preview((), (), str(e) or type(e).__name__, [])
+    mine = _concerns(fixture_id, output_id, segs, issues)
+    level = max((i.level.value for i in mine), key=lambda v: LEVEL_RANK[v], default="")
+    return Preview(tuple(segs), mine, None, _preview_rects(layout, fixture_id, output_id, segs, level, geom))
+
+
+def _addr_key(fx) -> tuple:
+    a = fx.address
+    return a.output_id, a.universe, a.channel, a.mode
+
+
+def shifted(before: Patch, after: Patch) -> list[str]:
+    """Фикстуры, у которых изменился адрес (выход, юниверс, канал, режим) — в порядке патча ``after``; фикстуры,
+    которых нет в одном из патчей, тоже в списке (удалённые — после, в порядке ``before``)."""
+    old = {fx.id: _addr_key(fx) for fx in before.fixtures}
+    new = {fx.id: _addr_key(fx) for fx in after.fixtures}
+    res = [fid for fid in new if old.get(fid) != new[fid]]
+    res += [fid for fid in old if fid not in new]
+    return res
 
 
 # ---------- сводка выхода (2.7) ----------
