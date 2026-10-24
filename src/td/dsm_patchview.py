@@ -395,10 +395,11 @@ def drop_address_from_grab(layout: MapLayout, patch: Patch, fixture_id: str, gra
 PREVIEW_ALPHA = 0.6
 
 
-def apply_address(patch: Patch, fixture_id: str, output_id: str, universe: int, channel: int) -> Patch:
+def apply_address(patch: Patch, fixture_id: str, output_id: str, universe: int, channel: int,
+                  port_id: str | None = None) -> Patch:
     """Правка адреса одним кодом для предпросмотра и реальной записи (``edit`` для ``SavePatch``): ручной адрес
     ``set_manual_address`` и пересчёт авто-соседей ``auto_assign_all``. Ошибки ядра — наружу (``OperationError``)."""
-    trial = set_manual_address(patch, fixture_id, output_id, universe, channel)
+    trial = set_manual_address(patch, fixture_id, output_id, universe, channel, port_id)
     return auto_assign_all(trial)[0]
 
 
@@ -437,12 +438,12 @@ def _preview_rects(layout: MapLayout, fixture_id: str, output_id: str, segs: lis
 
 
 def preview(layout: MapLayout, patch: Patch, fixture_id: str, output_id: str, universe: int, channel: int,
-            geom: Geom = Geom()) -> Preview:
+            geom: Geom = Geom(), port_id: str | None = None) -> Preview:
     """Предпросмотр пробного адреса (4.3): пробный патч ``apply_address`` → сегменты фикстуры ``fixture_segments`` →
     ``validate`` → проблемы, задевающие фикстуру, и прямоугольники по текущей раскладке. Ошибка ядра
     (``OperationError``, ``LayoutError``, ``ValueError``…) — ``Preview(error=текст)`` без исключения."""
     try:
-        trial = apply_address(patch, fixture_id, output_id, universe, channel)
+        trial = apply_address(patch, fixture_id, output_id, universe, channel, port_id)
         fx = get_fixture(trial, fixture_id)
         segs = fixture_segments(trial, fx)
         issues = validate(trial)

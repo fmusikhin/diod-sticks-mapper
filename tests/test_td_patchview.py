@@ -835,3 +835,11 @@ def test_sheet_csv_round_trip():
     assert back == rows
     assert list(csv.reader(io.StringIO(text.encode("utf-8").decode("utf-8")), delimiter=";")) == rows   # UTF-8
     assert any(ord(ch) > 127 for r in back[1:-1] for c in r for ch in c)                 # кириллица имён патча
+
+
+def test_preview_checks_port_like_the_real_edit():
+    patch, layout = _layout()
+    assert pv.preview(layout, patch, "fx1", "out1", 4, 1, pv.Geom(), "port1").error is None
+    assert pv.preview(layout, patch, "fx1", "out1", 4, 1, pv.Geom(), "nope").error          # нет такого порта
+    trial = pv.apply_address(patch, "fx1", "out1", 4, 1, "port1")
+    assert _fx(trial, "fx1").address.port_id == "port1" and _fx(trial, "fx1").address.mode.value == "manual"

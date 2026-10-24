@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import os
 import time
 import traceback
 
@@ -28,6 +29,7 @@ class DsmPatchViewExt:
         self.zoom_row: int | None = None       # строка крупного юниверса
         self.selection: tuple[str, ...] = ()   # выбранные фикстуры
         self.undo_doc = None                   # документ файла до последней правки (одна ступень отмены)
+        self._undo_file: tuple[str, float] = ("", 0.0)   # (файл, дата нашей записи) — к чему применима отмена
         self.message: str = ""
         self.layout = None                     # MapLayout текущего патча и выхода (для попадания и предпросмотра)
         self.last_rebuild_ms: float = 0.0      # время последней перестройки таблиц (9.1)
@@ -97,7 +99,34 @@ class DsmPatchViewExt:
 
     # ------------------------------------------------------------------ правки (задачи 2.3–2.5)
     def ReAddress(self, fixture_id: str, output_id: str, universe: int, channel: int) -> bool:
-        return self._not_yet("ReAddress")
+        """Ручной адрес фикстуры (4.1, 4.2): начало в (выход, юниверс, канал). Невозможный адрес (ошибка ядра, канал вне
+        1–512, юниверс вне протокола) — отказ без правки; конфликты правку не блокируют, они на карте (4.7)."""
+        eng = self._engine()
+        if not self._can_edit("ReAddress"):
+            return False
+        try:
+            universe, channel = int(universe), int(channel)
+        except (TypeError, ValueError):
+            return self._fail(f"ReAddress: юниверс и канал — целые числа ({universe!r}, {channel!r})")
+        if not 1 <= channel <= 512:
+            return self._fail(f"ReAddress: канал {channel} вне 1–512")
+        out = next((o for o in eng.patch.outputs if o.id == output_id), None)
+        if out is None:
+            return self._fail(f"ReAddress: нет такого выхода: {output_id}")
+        from dsm_core.protocol import universe_range     # ядро в sys.path (движок подключает его при старте)
+        lo, hi = universe_range(out.protocol)
+        if not lo <= universe <= hi:
+            return self._fail(f"ReAddress: юниверс {universe} вне диапазона {out.protocol.value} {lo}–{hi}")
+        cur = next((f for f in eng.patch.fixtures if f.id == fixture_id), None)
+        port = cur.address.port_id if cur is not None and cur.address.output_id == output_id else None   # в своём выходе — порт сохраняется
+        L = self.logic
+        pre = L.preview(self.layout or L.map_layout(eng.patch, {}, [], None), eng.patch, fixture_id, output_id,
+                        universe, channel, L.Geom(), port)              # проверка с тем же портом, что и правка
+        if pre.error:
+            return self._fail(f"ReAddress: {pre.error}")
+        api = eng.api
+        return self._edit(lambda p: api.set_manual_address(p, fixture_id, output_id, universe, channel, port),
+                          f"{fixture_id} → {output_id} {universe}:{channel}", subject=fixture_id)
 
     def ToAuto(self, fixture_id: str, output_id: str | None = None) -> bool:
         return self._not_yet("ToAuto")
@@ -132,7 +161,18 @@ class DsmPatchViewExt:
         return self._not_yet("ReorderPort")
 
     def Undo(self) -> bool:
-        return self._not_yet("Undo")
+        """Отменить последнюю правку (4.9): вернуть документ файла до неё — одна ступень. Отмена действует, только пока
+        файл — тот же и не менялся после правки (иначе затёрла бы чужое); работает и при ошибке загрузки после записи."""
+        if self.undo_doc is None:
+            return self._fail("Undo: нечего отменять", notify=False)
+        eng = self._engine()
+        if eng.patch is None:
+            return self._fail("Undo: патч не загружен")
+        if not self._undo_valid():
+            self._drop_undo()
+            return self._fail("Undo: файл патча сменился или изменён после правки — отмена недоступна")
+        doc = self.undo_doc
+        return self._edit(lambda p: doc, "отмена", keep_undo=False)   # запись отмены снимает undo_doc
 
     def ExportSheet(self, path: str | None = None) -> str:
         self._not_yet("ExportSheet")
@@ -140,7 +180,10 @@ class DsmPatchViewExt:
 
     # ------------------------------------------------------------------ события
     def OnPatchLoaded(self, patch, issues) -> None:
-        """Слушатель движка: перестройка таблиц карты; выбранный выход и крупный юниверс сохраняются, если есть (1.3)."""
+        """Слушатель движка: перестройка таблиц карты; выбранный выход и крупный юниверс сохраняются, если есть (1.3).
+        Отмена привязана к файлу и дате своей записи — загрузка другого или изменённого файла её снимает."""
+        if self.undo_doc is not None and not self._undo_valid():
+            self._drop_undo()
         if self.output_id is not None and not any(o.id == self.output_id for o in patch.outputs):
             self.output_id = None
             self.zoom_row = None
@@ -173,6 +216,72 @@ class DsmPatchViewExt:
             self._engine().WriteInfo()
         finally:
             self._in_par = False
+
+    # ------------------------------------------------------------------ общий путь правки (2.3)
+    def _can_edit(self, name: str) -> bool:
+        """Без патча или при ошибке загрузки правки неактивны (1.4)."""
+        eng = self._engine()
+        if eng.patch is None or eng.status != "ok":
+            self._fail(f"{name}: патч не загружен (статус {eng.status})")
+            return False
+        return True
+
+    def _edit(self, edit, label: str, keep_undo: bool = True, subject: str | None = None) -> bool:
+        """Правка ядра → запись файла движком с пересборкой → перестройка по слушателю → «сдвинулось N» (4.8).
+        Отказ ядра или записи: файл, патч и карта прежние, причина в статусе и onOutputError; undo_doc не трогается.
+        Файл записан, но не загрузился (ошибка раскладки): отмена сохраняется — Undo вернёт прежний файл (4.7, 6.3)."""
+        eng = self._engine()
+        before = eng.patch
+        full = eng.ResolvePath(eng.patch_path)
+        try:
+            snapshot, _notes = eng.api.load(full)                    # документ файла до правки — для отмены
+            mtime0 = os.path.getmtime(full)
+        except Exception as e:  # файл исчез или не читается — правку не начинаем
+            return self._fail(f"правка: файл патча не читается: {e}")
+        ok = eng.SavePatch(edit, True)
+        try:
+            mtime1 = os.path.getmtime(full)
+        except OSError:
+            mtime1 = mtime0
+        written = mtime1 != mtime0
+        if written:                                                  # файл переписан (загрузка могла и не пройти)
+            if keep_undo:
+                self.undo_doc, self._undo_file = snapshot, (full, mtime1)
+            else:
+                self._drop_undo()
+        if not ok:                                                   # движок уже вызвал onOutputError — второй раз не зовём
+            if not written:
+                return self._fail(f"правка не записана: {eng.message}", notify=False)
+            hint = "; Undo вернёт прежний файл" if keep_undo else ""
+            return self._fail(f"правка записана, но патч не загрузился: {eng.message}{hint}", notify=False)
+        moved = [f for f in self.logic.shifted(before, eng.patch) if f != subject]   # кроме самой правленной фикстуры
+        self.message = f"{label}" + (f"; сдвинулось {len(moved)}: {' '.join(moved[:8])}" if moved else "")
+        self._write("pv_status", self._status_rows(eng, *self._counts))   # таблицы уже перестроены слушателем загрузки
+        eng.WriteInfo()
+        return True
+
+    def _undo_valid(self) -> bool:
+        """Отмена применима: загружен тот же файл, что правили, и его дата — дата нашей записи."""
+        eng = self._engine()
+        path, mtime = self._undo_file
+        try:
+            return bool(path) and eng.ResolvePath(eng.patch_path) == path and os.path.getmtime(path) == mtime
+        except OSError:
+            return False
+
+    def _drop_undo(self) -> None:
+        self.undo_doc, self._undo_file = None, ("", 0.0)
+
+    def _fail(self, message: str, notify: bool = True) -> bool:
+        """Команда отклонена: причина в статусе панели, info и onOutputError (4.7); ``notify=False`` — колбэк уже вызван."""
+        self.message = message
+        eng = self._engine()
+        if self._seen is not None:
+            self._write("pv_status", self._status_rows(eng, *self._counts))
+        eng.WriteInfo()
+        if notify:
+            eng.CallUser("onOutputError", message)
+        return False
 
     # ------------------------------------------------------------------ таблицы (2.2)
     def _rebuild(self) -> None:
