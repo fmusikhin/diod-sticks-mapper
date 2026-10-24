@@ -79,6 +79,16 @@
 | `Rawactive` | Toggle | выкл. | сырой адрес вкл. |
 | `Testwindow` | Toggle | выкл. | окно панели TEST (панели пока нет) |
 
+Страница `Dmx` (спека `patch-view`, в работе — команды пока дают сообщение «не реализовано»):
+
+| Пара | Тип | По умолчанию | Смысл |
+|---|---|---|---|
+| `Dmxwindow` | Toggle | выкл. | окно вкладки DMX (карта юниверсов) |
+| `Dmxoutput` | Str | пусто | выбранный выход карты (`id`); пусто — все |
+| `Dmxsnap` | Toggle | вкл. | привязка к ячейке при перетаскивании (Shift — любой канал) |
+| `Dmxundo` | Pulse | | отменить последнюю правку |
+| `Dmxexport` | Pulse | | экспорт листа адресов CSV рядом с патчем |
+
 Страница `Info` (все `readOnly`):
 
 | Пара | Значение |
@@ -129,7 +139,9 @@ DAT из пары `Callbacks` (шаблон — `src/td/dsm_callbacks_default.py
 Корень — `baseCOMP` `dsm`, `parentshortcut = dsm` (внутри всё через `parent.dsm`, абсолютных путей нет).
 Расширение `DsmEngineExt` — DAT `engine_ext` (`src/td/dsm_engine_ext.py`); второе расширение `DsmLocateExt` — DAT `locate_ext`
 (`src/td/dsm_locate_ext.py`), чистая логика Locate — `locate_mod` (`src/td/dsm_locate.py`), шейдер — `locate_glsl`
-(`src/glsl/locate.glsl`), исполнитель пар страницы `Locate` — `locate_parexec`. DAT корня: `agents_md` (контракт для агентов),
+(`src/glsl/locate.glsl`), исполнитель пар страницы `Locate` — `locate_parexec`; третье расширение `DsmPatchViewExt` — DAT
+`patchview_ext` (`src/td/dsm_patchview_ext.py`), чистая логика карты DMX — `patchview_mod` (`src/td/dsm_patchview.py`),
+исполнитель пар страницы `Dmx` — `patchview_parexec`. DAT корня: `agents_md` (контракт для агентов),
 `geometry_mod`, `px_process_glsl`, `callbacks`, `par_exec` (`Patchfile`/`Reload`/`Active` → расширение).
 
 | Подконтейнер | Что внутри |
