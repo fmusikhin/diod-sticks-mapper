@@ -33,10 +33,10 @@ def test_four_examples_present():
 def test_no_real_ips_in_repo():
     ip_re = re.compile(r"(?<![\d.])(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?![\d.])")
     bad = []
-    for folder in ("examples", "tests", "src/core", "src/td"):
+    for folder in ("examples", "tests", "src/core", "src/td", "td/stand"):
         for f in (ROOT / folder).rglob("*"):
-            if f.suffix not in (".py", ".json", ".csv", ".md", ".txt"):
-                continue
+            if f.suffix not in (".py", ".json", ".csv", ".md", ".txt") or "reports" in f.parts:
+                continue      # td/stand/reports — отчёты и перехваты стенда, не в git
             for m in ip_re.finditer(f.read_text(encoding="utf-8", errors="ignore")):
                 try:
                     ip = ipaddress.ip_address(m.group(1))

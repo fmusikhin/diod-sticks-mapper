@@ -47,6 +47,48 @@
 | `White` | Float | 1 | |
 | `Ingamma` | Float | 1 | гамма входа |
 
+Страница `Locate` (спека `locate-test`, в `main` — каркас 1.1–3.3: команды дают сообщение «не реализовано», шейдер в обходе,
+сырой адрес выключен; вывод совпадает с 0.1 байт в байт):
+
+| Пара | Тип | По умолчанию | Смысл |
+|---|---|---|---|
+| `Target` | Str | пусто | цель: `fx7`, `#12`, `name:…`, `group:…`, `output:…`, `port:out/p`; через запятую |
+| `Mode` | Menu | `blink` | `blink` / `direction` / `number` / `address` |
+| `Others` | Menu | `solo` | остальные: `solo` / `dim` / `over` |
+| `Level` | Float 0–1 | 0,3 | уровень Locate (без `Master`) |
+| `Dim` | Float 0–1 | 0,2 | множитель «приглушить» |
+| `Blinkhz` | Float | 2 | частота мигания |
+| `Blinksmooth` | Toggle | выкл. | плавное мигание |
+| `Runsec` | Float 1–3 | 2 | проход бегущей ячейки |
+| `Clear` | Pulse | | снять Locate и паттерн |
+| `Next` | Pulse | | следующая фикстура |
+| `Prev` | Pulse | | предыдущая фикстура |
+| `Walk` | Toggle | выкл. | автошаг |
+| `Walkstep` | Float | 3 | интервал автошага, с |
+| `Walkloop` | Toggle | вкл. | по кругу |
+| `Walkunchecked` | Toggle | выкл. | только непроверенные |
+| `Testpattern` | Menu | `off` | `fill` / `rgbw` / `chase` |
+| `Testcolorr` | RGB | 1 | цвет заливки (r) |
+| `Testcolorg` | RGB | 1 | цвет заливки (g) |
+| `Testcolorb` | RGB | 1 | цвет заливки (b) |
+| `Rawoutput` | Str | пусто | `id` выхода сырого адреса |
+| `Rawuniverse` | Int | 0 | юниверс |
+| `Rawfirst` | Int 1–512 | 1 | первый канал |
+| `Rawlast` | Int 1–512 | 512 | последний канал |
+| `Rawvalue` | Int 0–255 | 255 | значение |
+| `Rawactive` | Toggle | выкл. | сырой адрес вкл. |
+| `Testwindow` | Toggle | выкл. | окно панели TEST (панели пока нет) |
+
+Страница `Dmx` (спека `patch-view`, в работе — команды пока дают сообщение «не реализовано»):
+
+| Пара | Тип | По умолчанию | Смысл |
+|---|---|---|---|
+| `Dmxwindow` | Toggle | выкл. | окно вкладки DMX (карта юниверсов) |
+| `Dmxoutput` | Str | пусто | выбранный выход карты (`id`); пусто — все |
+| `Dmxsnap` | Toggle | вкл. | привязка к ячейке при перетаскивании (Shift — любой канал) |
+| `Dmxundo` | Pulse | | отменить последнюю правку |
+| `Dmxexport` | Pulse | | экспорт листа адресов CSV рядом с патчем |
+
 Страница `Info` (все `readOnly`):
 
 | Пара | Значение |
@@ -73,6 +115,7 @@ DAT из пары `Callbacks` (шаблон — `src/td/dsm_callbacks_default.py
 
 - `onPatchLoaded(patch, issues)` — после успешной загрузки: объект `Patch` ядра и список `Issue` проверки.
 - `onOutputError(message)` — статус `error` (файл, JSON, схема, ядро) и новые сообщения узлов вывода/шейдера (один раз на текст).
+- `onSelect(fixture_ids)` — выбор фикстур на карте DMX (`patch-view`); пустой список — выбор снят.
 
 ## Таблица `info` (`out4`)
 
@@ -94,27 +137,36 @@ DAT из пары `Callbacks` (шаблон — `src/td/dsm_callbacks_default.py
 ## Структура компонента
 
 Корень — `baseCOMP` `dsm`, `parentshortcut = dsm` (внутри всё через `parent.dsm`, абсолютных путей нет).
-Расширение `DsmEngineExt` — DAT `engine_ext` (`src/td/dsm_engine_ext.py`). DAT корня: `agents_md` (контракт для агентов),
+Расширение `DsmEngineExt` — DAT `engine_ext` (`src/td/dsm_engine_ext.py`); второе расширение `DsmLocateExt` — DAT `locate_ext`
+(`src/td/dsm_locate_ext.py`), чистая логика Locate — `locate_mod` (`src/td/dsm_locate.py`), шейдер — `locate_glsl`
+(`src/glsl/locate.glsl`), исполнитель пар страницы `Locate` — `locate_parexec`; третье расширение `DsmPatchViewExt` — DAT
+`patchview_ext` (`src/td/dsm_patchview_ext.py`), чистая логика карты DMX — `patchview_mod` (`src/td/dsm_patchview.py`),
+исполнитель пар страницы `Dmx` — `patchview_parexec`. DAT корня: `agents_md` (контракт для агентов),
 `geometry_mod`, `px_process_glsl`, `callbacks`, `par_exec` (`Patchfile`/`Reload`/`Active` → расширение).
 
 | Подконтейнер | Что внутри |
 |---|---|
 | `input` | `in1` → `crop` → `resize` → `levels` → `in_prepared` (пары `Input`) |
-| `tables` | DAT от расширения: `geo_cells`, `geo_prims`, `geo_raw`, `raw_prims`, `fx_arrows`, `arrow_pts`, `arrow_prims`, `profiles`, `delay_groups`, `out_groups`, `fixture_sets`, `raw_sets`, `map_sets`, `routing_<grp>`, `info` |
+| `tables` | DAT от расширения: `geo_cells`, `geo_prims`, `geo_raw`, `raw_prims`, `fx_arrows`, `arrow_pts`, `arrow_prims`, `profiles`, `delay_groups`, `out_groups`, `fixture_sets`, `raw_sets`, `map_sets`, `routing_<grp>`, `info`; Locate: `locate_fx`, `locate_raw_pts`, `locate_raw_prims`; DMX (patch-view): `pv_rects`, `pv_preview`, `pv_zoom`, `pv_labels`, `pv_rows`, `pv_issues`, `pv_unassigned`, `pv_outputs`, `pv_ports`, `pv_sheet`, `pv_status`, `pv_hover`, рендер панели `rn_map_fill`, `rn_map_line`, `rn_map_prev`, `rn_map_labels`, `rn_zoom_fill`, `rn_zoom_line`, `rn_zoom_grid` |
 | `engine` | `pts_cells` (`dattoPOP` из `geo_cells` + `geo_prims`) → `px_process` (`glslPOP`, выборка и обработка; ошибки компиляции — `px_process_info`) → `px_out` → `out1`; `pts_raw` → `raw_out` → `out2` (служебные каналы) |
-| `hook` | `in1` → `out1` — точка подключения `locate-test` и `palette-generators` (контракт ниже) |
+| `hook` | `in1` → `locate` (`glslPOP` Locate, в обходе, пока Locate выключен; свои `locate_info`, `locate_compute`) → `out1` — точка
+  подключения `locate-test` и `palette-generators` (контракт ниже); `locate_fx_chop`, `locate_addr_chop` — `dattoCHOP` из `tables/locate_fx` |
 | `delay` | `in1`/`in2` (ячейки/служебные) → реплики `grp<k>` по `delay_groups` (репликатор `rep`; внутри `sel_c`/`sel_r` → `keep_c`/`keep_r` → `cache_c`/`cache_r`) → `merge_c`/`merge_r` → `px_final`/`raw_final` |
 | `fixtures` | `in1`/`in2` → реплики `p<k>g<j>` по `fixture_sets` (репликатор `rep`; профиль × группа вывода): `sel` → `keep` → `attrs` → `fixture` (`dmxfixturePOP`) → `map` (`dmxmapDAT`, по запросу); `raw_g<j>` по `raw_sets` (репликатор `rep_raw`) |
-| `output` | реплики `out_g<j>` по `out_groups` (репликатор `rep`): `out` (`dmxoutPOP` на группу выхода; протокол, multicast, частота, ArtSync, маршрутизация из `routing_<grp>`) |
+| `output` | реплики `out_g<j>` по `out_groups` (репликатор `rep`, колбэк `rep_callbacks` ↔ `src/td/dsm_output_callbacks.py`): `out` (`dmxoutPOP`
+  на группу выхода; протокол, multicast, частота, ArtSync, маршрутизация из `routing_<grp>`); `raw` — сырой адрес Locate (`raw_geo` → `raw_fix`,
+  последняя в списке фикстур каждой группы, выключена) |
 | `diag` | `counters` (1 Гц → `UpdateCounters`), превью `preview_render`/`preview` (`geo_pts` с `mat_pts`, `geo_arrows` с `mat_arrows`, `cam`, `bg`), `pixels_top`, `pixels_chop` → `pixels_named`, карты `rep_maps` → `map_<set>` → `dmxmap_all` |
 | `watch` | `watch_folder` (`folderDAT` на папку патча) + `watch_exec` → `CheckFile` при `Autoreload` |
+| `ui_dmx` | панель DMX 1280×720 (`containerCOMP`, `parentshortcut = dmx`, `display = False`, окно `win` по паре `Dmxwindow`): `header_bar` (счётчики, статус, кнопки), `body_lr` — слева карта (рендер инстансов из таблиц rn_map_*, подписи Geo Text, мышь → `OnMap`, подсказка) и крупный юниверс (rn_zoom_*, мышь → `OnZoom`), справа вкладки по паре `Sidetab` (листеры проблем, выходов, «без адреса» на таблицах pv_*, редактор фикстуры); редакторы `fixture_edit`, `output_edit` и их исполнители `fixture_edit_exec`, `output_edit_exec`. Пары `Style`/`Geom` на корне панели; при закрытом окне рендеры не кукаются |
 | `templates` | мастера репликаторов `fx_tpl`, `raw_tpl`, `delay_tpl`, `out_tpl`, `map_tpl`; `allowCooking = False` (иначе шаблон кукается и дублирует вывод) |
 
 Выходы корня: `sel_preview` → `out1`, `sel_pixels` → `out2`, `sel_pxchop` → `out3`, `sel_info` → `out4`, `sel_map` → `out5`.
 
 Публичные методы расширения (промоутятся на COMP): `Reload`, `LoadPatch(path)`, `ReportError(message)`,
 `ApplyActive`, `RefreshMaps(on, frames)` (карты DMX активны только по запросу — иначе 10–25 мс CPU на кук),
-`TuneBypass` (обход `keep_c`/`cache_c`/`merge_c` и их `_r`-пары при одной группе), `UpdateCounters`, `CheckFile`, `ResolvePath(path)`.
+`TuneBypass` (обход `keep_c`/`cache_c`/`merge_c` и их `_r`-пары при одной группе), `UpdateCounters`, `CheckFile`, `ResolvePath(path)`,
+`CallUser(name, *args)` (колбэк пользователя из частей компонента).
 
 ## Контракт точки подключения `hook`
 

@@ -13,3 +13,8 @@ def onPatchLoaded(patch, issues):
 def onOutputError(message):
     """Ошибка загрузки или вывода. message — текст по-русски, при ошибке схемы — с путём к полю."""
     pass
+
+
+def onSelect(fixture_ids):
+    """Выбор фикстур на карте DMX (patch-view): fixture_ids — список id в порядке патча; пустой — выбор снят."""
+    pass
