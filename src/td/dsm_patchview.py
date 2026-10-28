@@ -565,3 +565,53 @@ def sheet_rows(patch: Patch, output_id: str | None = None) -> Rows:
 def sheet_csv(rows: Rows) -> str:
     """CSV листа адресов: разделитель ``;``, строка для записи в UTF-8 — писатель ядра ``rows_to_csv``."""
     return rows_to_csv(rows, SHEET_DIALECT)
+
+
+# ---------- рендер панели (3.2): прямоугольники и подписи в пикселях области ----------
+RENDER_COLUMNS = ["tx", "ty", "sx", "sy", "r", "g", "b", "a", "tz"]
+SPEC_COLUMNS = ["text", "tx", "ty", "fontsize", "alignx", "fontcolorr", "fontcolorg", "fontcolorb", "fontalpha"]
+
+
+def render_rows(rows: Rows, x0: float, y0: float, w: float, h: float, layers: tuple[int, ...]) -> Rows:
+    """Строки ``RECT_COLUMNS`` (доли области) → инстансы в пикселях: прямоугольник ``[tx, tx+sx] × [ty, ty+sy]`` для
+    единичного квадрата с углом в начале координат; ``x0, y0`` — сдвиг области (отступ под подписи), ``w, h`` — её размер;
+    ``tz`` — слой (выше — ближе к камере). Только строки слоёв ``layers``."""
+    out: Rows = [list(RENDER_COLUMNS)]
+    if not rows:
+        return out
+    head = rows[0]
+    ix = {c: head.index(c) for c in RECT_COLUMNS}
+    for r in rows[1:]:
+        layer = int(float(r[ix["layer"]]))
+        if layer not in layers:
+            continue
+        x, y, rw, rh = (float(r[ix[k]]) for k in ("x", "y", "w", "h"))
+        out.append([f"{x0 + x * w:.2f}", f"{y0 + y * h:.2f}", f"{max(rw * w, 1.0):.2f}", f"{max(rh * h, 1.0):.2f}",
+                    r[ix["r"]], r[ix["g"]], r[ix["b"]], r[ix["a"]], f"{layer * 0.1:.2f}"])
+    return out
+
+
+def label_spec(labels: Rows, w: float, h: float, gutter: float, fontsize: float,
+               row_h: float | None = None) -> Rows:
+    """``pv_labels`` → таблица Geo Text (specdat) в пикселях: юниверсы — в полосе ``gutter`` слева, сегменты — от начала
+    сегмента внутри области карты ``[gutter, w]``; узкие сегменты (``wide=0``) и строки ниже шрифта — без подписи."""
+    out: Rows = [list(SPEC_COLUMNS)]
+    if not labels or (row_h is not None and row_h < fontsize * 1.2):
+        return out
+    head = labels[0]
+    ix = {c: head.index(c) for c in LABEL_COLUMNS}
+    inner = max(w - gutter, 1.0)
+    for r in labels[1:]:
+        x, y = float(r[ix["x"]]), float(r[ix["y"]])
+        if r[ix["kind"]] == "universe":
+            out.append([r[ix["text"]], "4", f"{y * h:.2f}", f"{fontsize:g}", "left", "0.75", "0.75", "0.78", "1"])
+        elif r[ix["wide"]] == "1":
+            out.append([r[ix["text"]], f"{gutter + x * inner + 4:.2f}", f"{y * h:.2f}", f"{fontsize:g}", "left",
+                        "0.05", "0.05", "0.05", "1"])
+    return out
+
+
+def area_uv(u: float, w: float, gutter: float) -> float:
+    """Доля панели карты по горизонтали → доля области сегментов (без полосы подписей); левее полосы — отрицательно."""
+    inner = max(w - gutter, 1.0)
+    return (u * w - gutter) / inner

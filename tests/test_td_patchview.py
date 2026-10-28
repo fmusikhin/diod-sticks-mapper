@@ -843,3 +843,25 @@ def test_preview_checks_port_like_the_real_edit():
     assert pv.preview(layout, patch, "fx1", "out1", 4, 1, pv.Geom(), "nope").error          # нет такого порта
     trial = pv.apply_address(patch, "fx1", "out1", 4, 1, "port1")
     assert _fx(trial, "fx1").address.port_id == "port1" and _fx(trial, "fx1").address.mode.value == "manual"
+
+
+def test_render_rows_pixels_and_layers():
+    rows = [pv.RECT_COLUMNS, ["0.5", "0.25", "0.25", "0.5", "1", "0", "0", "1", "1", "cells", "fx1"],
+            ["0", "0", "1", "1", "1", "1", "1", "1", "3", "select", "fx1"]]
+    fill = pv.render_rows(rows, 10, 0, 100, 200, (0, 1))
+    assert fill[0] == pv.RENDER_COLUMNS and len(fill) == 2
+    assert fill[1][:4] == ["60.00", "50.00", "25.00", "100.00"] and fill[1][8] == "0.10"
+    line = pv.render_rows(rows, 10, 0, 100, 200, (2, 3))
+    assert len(line) == 2 and line[1][8] == "0.30"
+    assert pv.render_rows([], 0, 0, 1, 1, (0,)) == [pv.RENDER_COLUMNS]
+
+
+def test_label_spec_gutter_and_narrow():
+    labels = [pv.LABEL_COLUMNS, ["0", "0.5", "0 (0.0.0)", "universe", "", "1"],
+              ["0.5", "0.5", "Стик · 10 px", "segment", "fx1", "1"], ["0.9", "0.5", "узкий", "segment", "fx2", "0"]]
+    spec = pv.label_spec(labels, 170, 100, 70, 11)
+    assert spec[0] == pv.SPEC_COLUMNS and len(spec) == 3
+    assert spec[1][0] == "0 (0.0.0)" and spec[1][1] == "4" and spec[1][2] == "50.00"
+    assert spec[2][1] == "124.00"
+    assert pv.label_spec(labels, 170, 100, 70, 11, row_h=8) == [pv.SPEC_COLUMNS]
+    assert pv.area_uv(70 / 170, 170, 70) == 0 and abs(pv.area_uv(1, 170, 70) - 1) < 1e-9

@@ -37,6 +37,9 @@ class DsmPatchViewExt:
         self._counts = (0, 0)                  # (ошибок, предупреждений) текущего патча — строки info dmx_*
         self._pending = False                  # перестройка запланирована на следующий кадр
         self._in_par = False                   # защита от повторного входа: метод меняет пару → пара вызывает метод
+        self._grab = None                      # (Hit, fixture_id, "map"|"zoom") — перетаскивание сегмента
+        self._drop = None                      # (выход, юниверс, канал) под курсором при перетаскивании
+        self.place_id: str | None = None       # фикстура из списка «не размещены», ждущая клика по карте (3.6)
         eng = ownerComp.ext.DsmEngineExt
         eng.AddListener(self.OnPatchLoaded)
         eng.AddInfoProvider(self._info_rows)
@@ -44,10 +47,37 @@ class DsmPatchViewExt:
 
     # ------------------------------------------------------------------ окно и выбор (задачи 2.2, 2.6, 3.1)
     def Open(self) -> None:
-        self._not_yet("Open")
+        """Окно панели DMX (1.1): рендеры включаются, таблицы рендера пишутся заново."""
+        ui = self._ui()
+        if ui is None:
+            self._fail("Open: нет панели ui_dmx", notify=False)
+            return
+        self._cooking(True)
+        self._sync_pars(Dmxwindow=True)
+        self._rebuild()
+        ui.op("win").par.winopen.pulse()
 
     def Close(self) -> None:
-        self._not_yet("Close")
+        """Закрыть окно; при закрытом окне рендеры карты не кукаются (1.6)."""
+        ui = self._ui()
+        if ui is None:
+            return
+        ui.op("win").par.winclose.pulse()
+        self._sync_pars(Dmxwindow=False)
+        self._cooking(False)
+
+    def _cooking(self, on: bool) -> None:
+        ui = self._ui()
+        for name in ("body_lr/left_col/map_area/map_render", "body_lr/left_col/zoom_area/zoom_render"):
+            r = ui.op(name)
+            if r is not None:
+                r.allowCooking = on
+
+    def PickUnassigned(self, fixture_id: str | None) -> None:
+        """Фикстура из «не размещены» ждёт клика по карте: клик по строке и каналу даёт ей адрес (3.6)."""
+        self.place_id = (fixture_id or "").strip() or None
+        self.message = f"{self.place_id}: щёлкните по строке карты" if self.place_id else ""
+        self._write_status()
 
     def SelectOutput(self, output_id: str | None) -> bool:
         """Выход карты (``None`` или пусто — все выходы, 2.5). Неизвестный выход — False и сообщение, выбор прежний."""
@@ -64,6 +94,7 @@ class DsmPatchViewExt:
         self.message = ""
         self._sync_pars(Dmxoutput=output_id or "")
         self._rebuild()
+        self._fill_editors()
         return True
 
     def ShowIssue(self, index: int) -> bool:
@@ -105,6 +136,7 @@ class DsmPatchViewExt:
             return
         self.selection = sel
         self._rebuild()
+        self._fill_editors()
         if notify:
             self._engine().CallUser("onSelect", list(sel))
 
@@ -193,6 +225,28 @@ class DsmPatchViewExt:
             return self._fail(f"Sequential: {e}")
         return self._edit(edit,
                           f"подряд {len(ids)} от {universe}:{channel}", subject=None, skip=set(ids))
+
+    def SequentialFromSelection(self) -> bool:
+        """Кнопка «Подряд»: выбранные фикстуры подряд от адреса первой из них (её адрес задают полями фикстуры)."""
+        eng = self._engine()
+        if eng.patch is None or not self.selection:
+            return self._fail("Подряд: выберите фикстуры", notify=False)
+        first = next((f for f in eng.patch.fixtures if f.id == self.selection[0]), None)
+        if first is None or first.address.universe is None or first.address.channel is None:
+            return self._fail(f"Подряд: у {self.selection[0]} нет адреса", notify=False)
+        return self.Sequential(list(self.selection), first.address.universe, first.address.channel)
+
+    def CurrentOutput(self) -> str | None:
+        """Выход для команд без явного выхода: выбранный на карте, иначе выход первой выбранной фикстуры, иначе первый."""
+        patch = self._engine().patch
+        if patch is None:
+            return None
+        if self.output_id:
+            return self.output_id
+        fx = next((f for f in patch.fixtures if self.selection and f.id == self.selection[0]), None)
+        if fx is not None and fx.address.output_id:
+            return fx.address.output_id
+        return patch.outputs[0].id if patch.outputs else None
 
     def AutoAssign(self, output_id: str) -> bool:
         """Раздать заново (5.4): все фикстуры выхода — в авто, ядро раскладывает их по цепочке от начала выхода."""
@@ -316,6 +370,8 @@ class DsmPatchViewExt:
         Отмена привязана к файлу и дате своей записи — загрузка другого или изменённого файла её снимает."""
         if self.undo_doc is not None and not self._undo_valid():
             self._drop_undo()
+        self._grab, self._drop, self.place_id = None, None, None     # раскладка сменилась — жест и размещение сброшены
+        self._write("pv_preview", [self.logic.RECT_COLUMNS])
         if self.output_id is not None and not any(o.id == self.output_id for o in patch.outputs):
             self.output_id = None
             self.zoom_row = None
@@ -323,8 +379,114 @@ class DsmPatchViewExt:
         self._rebuild()
 
     def OnMap(self, event: str, u: float, v: float, shift: bool = False) -> None:
-        """Обработчик области карты (задачи 3.3–3.4): down / move / up / hover."""
-        self._not_yet("OnMap")
+        """Область карты (3.3, 3.4): hover — подсказка; down — выбор сегмента (захват) или строки (крупный юниверс),
+        пусто — снять выбор; move — предпросмотр; up — правка общим путём, вне карты — отмена."""
+        ui = self._ui()
+        if self.layout is None or ui is None:
+            return
+        L = self.logic
+        w, _h = self._map_size()
+        mu = L.area_uv(u, w, float(ui.par.Gutterw))
+        h = L.hit(self.layout, mu, v)
+        self._pointer(event, h, shift, lambda: L.drop_address_from_grab(
+            self.layout, self._engine().patch, self._grab[1], self._grab[0], mu, v, not shift and bool(
+                self.ownerComp.par.Dmxsnap.eval())) if self._grab and self._grab[2] == "map" else None, "map", u, v)
+
+    def OnZoom(self, event: str, u: float, v: float, shift: bool = False) -> None:
+        """Крупный юниверс (2.4): то же, что карта, внутри строки ``zoom_row``; канал — по сетке 32×16."""
+        if self.layout is None or self.zoom_row is None:
+            return
+        L = self.logic
+        h = L.zoom_hit(self.layout, self.zoom_row, u, v)
+
+        def drop():
+            if not (self._grab and self._grab[2] == "zoom") or h.channel is None:
+                return None
+            grab, fid = self._grab[0], self._grab[1]
+            first = L._first_segment(self.layout, fid)
+            ch = h.channel if first is None or grab.channel is None else first.first_channel + (h.channel - grab.channel)
+            row = self.zoom_row if first is None else first.row
+            return L.drop_address(self.layout, self._engine().patch, fid, row, ch,
+                                  not shift and bool(self.ownerComp.par.Dmxsnap.eval()))
+        self._pointer(event, h, shift, drop, "zoom", u, v)
+
+    def _pointer(self, event: str, h, shift: bool, drop, area: str, u: float, v: float) -> None:
+        eng = self._engine()
+        if event == "hover":
+            self._hover(h, area, u, v)
+            return
+        if event == "down":
+            self._grab, self._drop = None, None
+            if self.place_id:                                                   # размещение из «не размещены»
+                fid, self.place_id = self.place_id, None
+                if h.row is None or h.channel is None:
+                    self.message = f"размещение {fid} отменено"
+                    self._write_status()
+                    return
+                try:
+                    out, uni, ch = self.logic.drop_address(self.layout, eng.patch, fid, h.row, h.channel,
+                                                           not shift and bool(self.ownerComp.par.Dmxsnap.eval()))
+                except (ValueError, KeyError) as e:
+                    self._fail(f"размещение: {e}", notify=False)
+                    return
+                self.ReAddress(fid, out, uni, ch)
+                return
+            if h.fixture_id:
+                self._grab = (h, h.fixture_id, area)
+                self._set_selection([h.fixture_id], notify=True)
+            elif h.row is not None:
+                self._grab = None
+                if area == "map":
+                    self.zoom_row = h.row
+                self._set_selection([], notify=True)
+                self._rebuild()
+            return
+        if self._grab is None:
+            return
+        if event == "move":
+            try:
+                addr = drop()
+            except (ValueError, KeyError):
+                addr = None
+            if addr == self._drop:
+                return
+            self._drop = addr
+            rows = [self.logic.RECT_COLUMNS]
+            if addr is not None:
+                pre = self.logic.preview(self.layout, eng.patch, self._grab[1], *addr)
+                rows = pre.rects if not pre.error else rows
+                self.message = (f"{self._grab[1]} → {addr[0]} {addr[1]}:{addr[2]}" + (f" — {pre.error}" if pre.error else "")
+                                + (f"; конфликтов {len(pre.issues)}" if pre.issues else ""))
+            self._write("pv_preview", rows)
+            self._write_preview_render()
+            self._write_status()
+            return
+        if event == "up":
+            grab, addr = self._grab, self._drop
+            self._grab, self._drop = None, None
+            self._write("pv_preview", [self.logic.RECT_COLUMNS])
+            self._write_preview_render()
+            if addr is None:
+                self.message = "перетаскивание отменено" if grab else ""
+                self._write_status()
+                return
+            fx = next((f for f in eng.patch.fixtures if f.id == grab[1]), None)
+            cur = (fx.address.output_id, fx.address.universe, fx.address.channel) if fx else None
+            if addr == cur:
+                self.message = ""
+                self._write_status()
+                return
+            self.ReAddress(grab[1], *addr)
+
+    def _hover(self, h, area: str, u: float, v: float) -> None:
+        if h.row is None:
+            text = ""
+        else:
+            r = self.layout.rows[h.row]
+            text = f"{r.output_id} u{r.universe} ({r.dotted}) ch {h.channel}"
+            if h.fixture_id:
+                text = f"{h.fixture_id} · " + text
+        self._write("pv_hover", [["key", "value"], ["text", text], ["area", area], ["u", f"{u:.4f}"], ["v", f"{v:.4f}"]])
 
     def OnDmxPar(self, par) -> None:
         """Исполнитель пар страницы Dmx (parexecuteDAT) → методы; повторный вход из метода игнорируется."""
@@ -392,7 +554,29 @@ class DsmPatchViewExt:
         self.message = f"{label}" + (f"; сдвинулось {len(moved)}: {' '.join(moved[:8])}" if moved else "")
         self._write("pv_status", self._status_rows(eng, *self._counts))   # таблицы уже перестроены слушателем загрузки
         eng.WriteInfo()
+        self._fill_editors()
         return True
+
+    def _fill_editors(self) -> None:
+        """Поля фикстуры и выхода панели (3.7) — по выбору: первая выбранная фикстура и текущий выход."""
+        ui, patch = self._ui(), self._engine().patch
+        if ui is None or patch is None:
+            return
+        fe, oe = ui.op("fixture_edit"), ui.op("output_edit")
+        fx = next((f for f in patch.fixtures if self.selection and f.id == self.selection[0]), None)
+        if fe is not None:
+            a = fx.address if fx is not None else None
+            fe.par.Fixture = fx.id if fx is not None else ""
+            fe.par.Output = (a.output_id or "") if a is not None else ""
+            fe.par.Universe = a.universe if a is not None and a.universe is not None else 0
+            fe.par.Channel = a.channel if a is not None and a.channel is not None else 1
+        out_id = self.CurrentOutput()
+        out = next((o for o in patch.outputs if o.id == out_id), None)
+        if oe is not None and out is not None:
+            oe.par.Output = out.id
+            oe.par.Ip = out.ip or ""
+            oe.par.Start = out.start_universe
+            oe.par.Count = out.universe_count or 0
 
     def _undo_valid(self) -> bool:
         """Отмена применима: загружен тот же файл, что правили, и его дата — дата нашей записи."""
@@ -431,6 +615,7 @@ class DsmPatchViewExt:
             for name, header in self._headers().items():      # пустая таблица = только заголовок (листеры, инстансинг)
                 self._write(name, [header])
             self._write("pv_status", self._status_rows(eng, 0, 0))
+            self._write_render()
             self.last_rebuild_ms = (time.perf_counter() - t0) * 1000.0
             eng.WriteInfo()
             return
@@ -456,6 +641,7 @@ class DsmPatchViewExt:
         errors = sum(1 for i in issues if i.level.value == "error")
         self._counts = (errors, len(issues) - errors)
         self._write("pv_status", self._status_rows(eng, errors, len(issues) - errors))
+        self._write_render()
         self.last_rebuild_ms = (time.perf_counter() - t0) * 1000.0
         eng.WriteInfo()
 
@@ -473,6 +659,52 @@ class DsmPatchViewExt:
         if self._pending and self._seen != (eng.patch, eng.status):
             self._rebuild()
         self._pending = False
+
+    def _ui(self):
+        return self.ownerComp.op("ui_dmx")
+
+    def _map_size(self) -> tuple[float, float]:
+        """Размер области карты в пикселях — из пар панели (не из геометрии панели: см. мануал, panel layout freeze)."""
+        ui = self._ui()
+        return (float(ui.par.w) - float(ui.par.Sidew),
+                float(ui.par.h) - float(ui.par.Headerh) - float(ui.par.Zoomh))
+
+    def _write_render(self) -> None:
+        """Таблицы инстансов и подписей для рендеров панели (3.2) — пиксели области; без панели — ничего."""
+        ui = self._ui()
+        if ui is None:
+            return
+        L = self.logic
+        w, h = self._map_size()
+        g = float(ui.par.Gutterw)
+        zw, zh = w, float(ui.par.Zoomh)
+        rects, zoom, prev = self._rows("pv_rects"), self._rows("pv_zoom"), self._rows("pv_preview")
+        self._write("rn_map_fill", L.render_rows(rects, g, 0, w - g, h, (0, 1)))
+        self._write("rn_map_line", L.render_rows(rects, g, 0, w - g, h, (2, 3)))
+        self._write("rn_map_prev", L.render_rows(prev, g, 0, w - g, h, (0, 1, 2, 3)))
+        self._write("rn_zoom_fill", L.render_rows(zoom, 0, 0, zw, zh, (0, 1)))
+        self._write("rn_zoom_line", L.render_rows(zoom, 0, 0, zw, zh, (2, 3)))
+        self._write("rn_zoom_grid", L.render_rows(zoom, 0, 0, zw, zh, (0,)))     # сетка клеток поверх сегментов
+        nrows = max(len(self.layout.rows), 1) if self.layout is not None else 1
+        self._write("rn_map_labels", L.label_spec(self._rows("pv_labels"), w, h, g, float(ui.par.Labelsize),
+                                                   row_h=h / nrows))
+
+    def _write_preview_render(self) -> None:
+        """При перетаскивании меняется только слой предпросмотра — остальные таблицы рендера не трогаем."""
+        ui = self._ui()
+        if ui is None:
+            return
+        w, h = self._map_size()
+        g = float(ui.par.Gutterw)
+        self._write("rn_map_prev", self.logic.render_rows(self._rows("pv_preview"), g, 0, w - g, h, (0, 1, 2, 3)))
+
+    def _rows(self, name: str) -> list[list[str]]:
+        d = self._table(name)
+        return [[c.val for c in r] for r in d.rows()] if d is not None else []
+
+    def _write_status(self) -> None:
+        self._write("pv_status", self._status_rows(self._engine(), *self._counts))
+        self._engine().WriteInfo()
 
     def _status_rows(self, eng, errors: int, warnings: int) -> list[list[str]]:
         return [["key", "value"], ["status", eng.status], ["output", self.output_id or "all"],

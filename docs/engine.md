@@ -147,7 +147,7 @@ DAT из пары `Callbacks` (шаблон — `src/td/dsm_callbacks_default.py
 | Подконтейнер | Что внутри |
 |---|---|
 | `input` | `in1` → `crop` → `resize` → `levels` → `in_prepared` (пары `Input`) |
-| `tables` | DAT от расширения: `geo_cells`, `geo_prims`, `geo_raw`, `raw_prims`, `fx_arrows`, `arrow_pts`, `arrow_prims`, `profiles`, `delay_groups`, `out_groups`, `fixture_sets`, `raw_sets`, `map_sets`, `routing_<grp>`, `info`; Locate: `locate_fx`, `locate_raw_pts`, `locate_raw_prims` |
+| `tables` | DAT от расширения: `geo_cells`, `geo_prims`, `geo_raw`, `raw_prims`, `fx_arrows`, `arrow_pts`, `arrow_prims`, `profiles`, `delay_groups`, `out_groups`, `fixture_sets`, `raw_sets`, `map_sets`, `routing_<grp>`, `info`; Locate: `locate_fx`, `locate_raw_pts`, `locate_raw_prims`; DMX (patch-view): `pv_rects`, `pv_preview`, `pv_zoom`, `pv_labels`, `pv_rows`, `pv_issues`, `pv_unassigned`, `pv_outputs`, `pv_ports`, `pv_sheet`, `pv_status`, `pv_hover`, рендер панели `rn_map_fill`, `rn_map_line`, `rn_map_prev`, `rn_map_labels`, `rn_zoom_fill`, `rn_zoom_line`, `rn_zoom_grid` |
 | `engine` | `pts_cells` (`dattoPOP` из `geo_cells` + `geo_prims`) → `px_process` (`glslPOP`, выборка и обработка; ошибки компиляции — `px_process_info`) → `px_out` → `out1`; `pts_raw` → `raw_out` → `out2` (служебные каналы) |
 | `hook` | `in1` → `locate` (`glslPOP` Locate, в обходе, пока Locate выключен; свои `locate_info`, `locate_compute`) → `out1` — точка
   подключения `locate-test` и `palette-generators` (контракт ниже); `locate_fx_chop`, `locate_addr_chop` — `dattoCHOP` из `tables/locate_fx` |
@@ -158,6 +158,7 @@ DAT из пары `Callbacks` (шаблон — `src/td/dsm_callbacks_default.py
   последняя в списке фикстур каждой группы, выключена) |
 | `diag` | `counters` (1 Гц → `UpdateCounters`), превью `preview_render`/`preview` (`geo_pts` с `mat_pts`, `geo_arrows` с `mat_arrows`, `cam`, `bg`), `pixels_top`, `pixels_chop` → `pixels_named`, карты `rep_maps` → `map_<set>` → `dmxmap_all` |
 | `watch` | `watch_folder` (`folderDAT` на папку патча) + `watch_exec` → `CheckFile` при `Autoreload` |
+| `ui_dmx` | панель DMX 1280×720 (`containerCOMP`, `parentshortcut = dmx`, `display = False`, окно `win` по паре `Dmxwindow`): `header_bar` (счётчики, статус, кнопки), `body_lr` — слева карта (рендер инстансов из таблиц rn_map_*, подписи Geo Text, мышь → `OnMap`, подсказка) и крупный юниверс (rn_zoom_*, мышь → `OnZoom`), справа вкладки по паре `Sidetab` (листеры проблем, выходов, «без адреса» на таблицах pv_*, редактор фикстуры); редакторы `fixture_edit`, `output_edit` и их исполнители `fixture_edit_exec`, `output_edit_exec`. Пары `Style`/`Geom` на корне панели; при закрытом окне рендеры не кукаются |
 | `templates` | мастера репликаторов `fx_tpl`, `raw_tpl`, `delay_tpl`, `out_tpl`, `map_tpl`; `allowCooking = False` (иначе шаблон кукается и дублирует вывод) |
 
 Выходы корня: `sel_preview` → `out1`, `sel_pixels` → `out2`, `sel_pxchop` → `out3`, `sel_info` → `out4`, `sel_map` → `out5`.
