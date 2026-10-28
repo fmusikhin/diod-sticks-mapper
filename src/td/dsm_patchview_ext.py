@@ -91,8 +91,22 @@ class DsmPatchViewExt:
             self._rebuild()
         return True
 
-    def Select(self, fixture_ids: list[str]) -> None:
-        self._not_yet("Select")
+    def Select(self, fixture_ids) -> None:
+        """Подсветка фикстур снаружи (8.1): без колбэка onSelect."""
+        self._set_selection(fixture_ids, notify=False)
+
+    def _set_selection(self, fixture_ids, notify: bool) -> None:
+        """Выбор → слой выделения карты, info; из панели — onSelect один раз на смену (8.2)."""
+        raw = fixture_ids.replace(",", " ").split() if isinstance(fixture_ids, str) else (fixture_ids or [])
+        patch = self._engine().patch
+        known = {f.id for f in patch.fixtures} if patch is not None else set()
+        sel = tuple(dict.fromkeys(str(i).strip() for i in raw if str(i).strip() in known))
+        if sel == self.selection:
+            return
+        self.selection = sel
+        self._rebuild()
+        if notify:
+            self._engine().CallUser("onSelect", list(sel))
 
     def Selection(self) -> list[str]:
         return list(self.selection)
@@ -181,7 +195,21 @@ class DsmPatchViewExt:
                           f"подряд {len(ids)} от {universe}:{channel}", subject=None, skip=set(ids))
 
     def AutoAssign(self, output_id: str) -> bool:
-        return self._not_yet("AutoAssign")
+        """Раздать заново (5.4): все фикстуры выхода — в авто, ядро раскладывает их по цепочке от начала выхода."""
+        eng = self._engine()
+        if not self._can_edit("AutoAssign"):
+            return False
+        out = next((o for o in eng.patch.outputs if o.id == output_id), None)
+        if out is None:
+            return self._fail(f"AutoAssign: нет такого выхода: {output_id}")
+        api = eng.api
+
+        def edit(p):
+            for fx in p.fixtures:
+                if fx.address.output_id == output_id and fx.address.mode.value == "manual":
+                    p = api.assign_to_output(p, fx.id, output_id, fx.address.port_id)
+            return p
+        return self._edit(edit, f"{output_id}: адреса розданы заново")
 
     def AddOutput(self) -> str | None:
         self._not_yet("AddOutput")
@@ -190,8 +218,51 @@ class DsmPatchViewExt:
     def RemoveOutput(self, output_id: str) -> bool:
         return self._not_yet("RemoveOutput")
 
+    OUTPUT_FIELDS = ("name", "ip", "start_universe", "universe_count", "rate_hz")
+
     def UpdateOutput(self, output_id: str, **fields) -> bool:
-        return self._not_yet("UpdateOutput")
+        """Параметры выхода (5.1): имя, IP, стартовый юниверс, число юниверсов, частота; проверка IP и диапазона."""
+        eng = self._engine()
+        if not self._can_edit("UpdateOutput"):
+            return False
+        out = next((o for o in eng.patch.outputs if o.id == output_id), None)
+        if out is None:
+            return self._fail(f"UpdateOutput: нет такого выхода: {output_id}")
+        bad = [k for k in fields if k not in self.OUTPUT_FIELDS]
+        if bad:
+            return self._fail(f"UpdateOutput: поля не правятся здесь: {' '.join(bad)}")
+        ch = {}
+        try:
+            if "name" in fields:
+                ch["name"] = str(fields["name"]).strip() or out.name
+            if "ip" in fields:
+                ip = (str(fields["ip"] or "")).strip()
+                if ip:
+                    import ipaddress
+                    ipaddress.IPv4Address(ip)
+                ch["ip"] = ip or None
+            if "start_universe" in fields:
+                ch["start_universe"] = int(fields["start_universe"])
+                from dsm_core.protocol import universe_range
+                lo, hi = universe_range(out.protocol)
+                if not lo <= ch["start_universe"] <= hi:
+                    return self._fail(f"UpdateOutput: юниверс {ch['start_universe']} вне {lo}–{hi}")
+            if "universe_count" in fields:
+                v = fields["universe_count"]
+                ch["universe_count"] = int(v) if v not in (None, "", 0, "0") else None
+                if ch["universe_count"] is not None and ch["universe_count"] < 1:
+                    return self._fail("UpdateOutput: число юниверсов — от 1")
+            if "rate_hz" in fields:
+                ch["rate_hz"] = float(fields["rate_hz"])
+                if not 1.0 <= ch["rate_hz"] <= 120.0:
+                    return self._fail("UpdateOutput: частота 1–120 Гц")
+        except (TypeError, ValueError) as e:
+            return self._fail(f"UpdateOutput: неверное значение: {e}")
+        if not ch:
+            return True
+        api = eng.api
+        return self._edit(lambda p: api.update_output(p, output_id, **ch),
+                          f"{output_id}: " + ", ".join(f"{k}={v}" for k, v in ch.items()))
 
     def AddPort(self, output_id: str) -> str | None:
         self._not_yet("AddPort")
@@ -221,8 +292,23 @@ class DsmPatchViewExt:
         return self._edit(lambda p: doc, "отмена", keep_undo=False)   # запись отмены снимает undo_doc
 
     def ExportSheet(self, path: str | None = None) -> str:
-        self._not_yet("ExportSheet")
-        return ""
+        """Лист адресов CSV (7.1): по умолчанию рядом с патчем ``<имя>_addresses.csv``; путь файла или "" при ошибке."""
+        eng = self._engine()
+        if eng.patch is None:
+            self._fail("ExportSheet: патч не загружен")
+            return ""
+        full = eng.ResolvePath(path) if path else os.path.splitext(eng.ResolvePath(eng.patch_path))[0] + "_addresses.csv"
+        try:
+            text = self.logic.sheet_csv(self.logic.sheet_rows(eng.patch, self.output_id))
+            with open(full, "w", encoding="utf-8", newline="") as fh:
+                fh.write(text)
+        except OSError as e:
+            self._fail(f"ExportSheet: не записан: {e}")
+            return ""
+        self.message = f"лист адресов: {os.path.basename(full)}"
+        self._write("pv_status", self._status_rows(eng, *self._counts))
+        eng.WriteInfo()
+        return full
 
     # ------------------------------------------------------------------ события
     def OnPatchLoaded(self, patch, issues) -> None:
