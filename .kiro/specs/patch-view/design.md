@@ -211,7 +211,7 @@ graph TB
 | 4.2 | на другой выход | `drop_address` (строка другого выхода) → `assign_to_output`/`set_manual_address` | | Переадресация |
 | 4.3 | предпросмотр | `preview`, `pv_preview`, `preview_render` | | Переадресация |
 | 4.4 | в авто | `ToAuto` → `clear_address` + `assign_to_output` | | |
-| 4.5 | подряд для выбора | `Sequential(ids, universe, channel)` → `assign_sequential` | | |
+| 4.5 | подряд для выбора | `Sequential(ids, universe, channel)` → `assign_sequential`, затем всем `set_manual_address` (все ручные, решение 28.10) | | |
 | 4.6 | поля юниверса/канала | `fixture_edit` пары `Universe`, `Channel` + parexec | | |
 | 4.7 | ошибки ядра не ломают патч | `_edit` (`try` ядро → `SavePatch`), `_fail` | | |
 | 4.8 | «сдвинулось N» | `_edit` сравнение адресов до/после загрузки | | |

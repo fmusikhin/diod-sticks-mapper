@@ -129,10 +129,56 @@ class DsmPatchViewExt:
                           f"{fixture_id} → {output_id} {universe}:{channel}", subject=fixture_id)
 
     def ToAuto(self, fixture_id: str, output_id: str | None = None) -> bool:
-        return self._not_yet("ToAuto")
+        """«В авто» и перенос на выход (4.2, 4.4): адрес в режим auto на выходе ``output_id`` (по умолчанию — текущий
+        выход фикстуры); номер раздаёт ядро при записи. В своём выходе порт сохраняется, на другом — без порта."""
+        eng = self._engine()
+        if not self._can_edit("ToAuto"):
+            return False
+        fx = next((f for f in eng.patch.fixtures if f.id == fixture_id), None)
+        if fx is None:
+            return self._fail(f"ToAuto: нет такой фикстуры: {fixture_id}")
+        output_id = (output_id or "").strip() or fx.address.output_id
+        if not output_id:
+            return self._fail(f"ToAuto: {fixture_id} не на выходе — укажите выход")
+        if not any(o.id == output_id for o in eng.patch.outputs):
+            return self._fail(f"ToAuto: нет такого выхода: {output_id}")
+        port = fx.address.port_id if fx.address.output_id == output_id else None
+        api = eng.api
+        # assign_to_output даёт тот же адрес, что clear_address → assign_to_output, но в своём выходе и порту
+        # не переставляет фикстуру в конец цепочки (порядок цепочки — порядок автоадресации)
+        return self._edit(lambda p: api.assign_to_output(p, fixture_id, output_id, port),
+                          f"{fixture_id} → {output_id} авто", subject=fixture_id)
 
     def Sequential(self, fixture_ids: list[str], universe: int, channel: int) -> bool:
-        return self._not_yet("Sequential")
+        """Подряд для списка (4.5): всем выбранным — ручные адреса подряд от (юниверс, канал), по правилам выхода
+        (``assign_sequential`` раскладывает, затем каждой фикстуре — ``set_manual_address`` с её адресом). Ручные, потому что
+        авто-адреса ядро при загрузке раздаёт заново от начала выхода. Все фикстуры — на одном выходе."""
+        eng = self._engine()
+        if not self._can_edit("Sequential"):
+            return False
+        raw = fixture_ids.replace(",", " ").split() if isinstance(fixture_ids, str) else (fixture_ids or [])
+        ids = list(dict.fromkeys(str(i).strip() for i in raw if str(i).strip()))   # пробел или запятая, без дублей
+        if not ids:
+            return self._fail("Sequential: пустой список фикстур")
+        try:
+            universe, channel = int(universe), int(channel)
+        except (TypeError, ValueError):
+            return self._fail(f"Sequential: юниверс и канал — целые числа ({universe!r}, {channel!r})")
+        api = eng.api
+        def edit(p):
+            laid, _issues = api.assign_sequential(p, ids, universe, channel)
+            for fid in ids:
+                a = next(f for f in laid.fixtures if f.id == fid).address
+                if a.universe is None or a.channel is None:
+                    raise api.OperationError(f"{fid} не помещается в выход от {universe}:{channel}")
+                p = api.set_manual_address(p, fid, a.output_id, a.universe, a.channel, a.port_id)
+            return p
+        try:                                                         # отказ ядра — до записи, без трассировки в textport
+            edit(eng.patch)
+        except (api.PatchError, KeyError, ValueError) as e:
+            return self._fail(f"Sequential: {e}")
+        return self._edit(edit,
+                          f"подряд {len(ids)} от {universe}:{channel}", subject=None, skip=set(ids))
 
     def AutoAssign(self, output_id: str) -> bool:
         return self._not_yet("AutoAssign")
@@ -226,7 +272,8 @@ class DsmPatchViewExt:
             return False
         return True
 
-    def _edit(self, edit, label: str, keep_undo: bool = True, subject: str | None = None) -> bool:
+    def _edit(self, edit, label: str, keep_undo: bool = True, subject: str | None = None,
+              skip: set[str] | None = None) -> bool:
         """Правка ядра → запись файла движком с пересборкой → перестройка по слушателю → «сдвинулось N» (4.8).
         Отказ ядра или записи: файл, патч и карта прежние, причина в статусе и onOutputError; undo_doc не трогается.
         Файл записан, но не загрузился (ошибка раскладки): отмена сохраняется — Undo вернёт прежний файл (4.7, 6.3)."""
@@ -254,7 +301,8 @@ class DsmPatchViewExt:
                 return self._fail(f"правка не записана: {eng.message}", notify=False)
             hint = "; Undo вернёт прежний файл" if keep_undo else ""
             return self._fail(f"правка записана, но патч не загрузился: {eng.message}{hint}", notify=False)
-        moved = [f for f in self.logic.shifted(before, eng.patch) if f != subject]   # кроме самой правленной фикстуры
+        skip = set(skip or ()) | ({subject} if subject else set())
+        moved = [f for f in self.logic.shifted(before, eng.patch) if f not in skip]   # кроме самих правленных фикстур
         self.message = f"{label}" + (f"; сдвинулось {len(moved)}: {' '.join(moved[:8])}" if moved else "")
         self._write("pv_status", self._status_rows(eng, *self._counts))   # таблицы уже перестроены слушателем загрузки
         eng.WriteInfo()
