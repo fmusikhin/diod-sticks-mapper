@@ -8,9 +8,9 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
-from dsm_core.api import add_fixture, assign_to_output, next_ids, update_fixture
-from dsm_core.model import (ArcShape, CurveShape, CustomShape, Direction, Fixture, LineShape, Patch, PolylineShape,
-                            RectShape)
+from dsm_core.api import add_fixture, add_fixture_type, assign_to_output, next_ids, update_fixture
+from dsm_core.model import (ArcShape, CurveShape, CustomShape, Direction, Fixture, FixtureKind, FixtureType, LineShape,
+                            MatrixLayout, Patch, PolylineShape, RectShape)
 
 OVERLAY_COLUMNS = ["tx", "ty", "rz", "sx", "sy", "r", "g", "b", "a"]
 SELECT_RGB = (1.0, 1.0, 1.0)
@@ -535,3 +535,64 @@ def snap_angle(anchor, q, step_deg: float = 15.0):
         return q
     a = math.radians(round(math.degrees(math.atan2(dy, dx)) / step_deg) * step_deg)
     return (anchor[0] + L * math.cos(a), anchor[1] + L * math.sin(a))
+
+
+
+# ---------- матрицы W×H ----------
+
+def new_matrix_type(patch: Patch, width: int, height: int, layout: str = "tl_rows", color_order: str = "RGB",
+                    name: str | None = None) -> tuple[Patch, str]:
+    """Новый матричный профиль W×H (W ячеек по ширине — вдоль длинной стороны, H рядов поперёк), раскладка — одна
+    из 16 ``MatrixLayout`` (угол старта × строки/столбцы × змейка). Возвращает патч и id профиля."""
+    width, height = max(1, int(width)), max(1, int(height))
+    tid = next_ids(patch, "fixture_type")[0]
+    ft = FixtureType(id=tid, name=name or f"Матрица {width}×{height}", kind=FixtureKind.MATRIX, cells=width * height,
+                     width=width, height=height, layout=MatrixLayout(layout), color_order=color_order)
+    return add_fixture_type(patch, ft), tid
+
+
+def is_matrix(patch: Patch, type_id: str) -> bool:
+    ft = next((t for t in patch.fixture_types if t.id == type_id), None)
+    return ft is not None and ft.kind == FixtureKind.MATRIX
+
+
+def line_to_rect(p1, p2, width: int, height: int) -> RectShape:
+    """Матрица «вдоль линии»: прямоугольник от p1 до p2 (W клеток вдоль), толщина — H клеток того же шага."""
+    L = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+    ang = math.degrees(math.atan2(p2[1] - p1[1], p2[0] - p1[0]))
+    return RectShape(center=((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2), size=(L, L * height / max(width, 1)),
+                     rotation_deg=ang)
+
+
+def _rect_local(shape: RectShape, lx: float, ly: float):
+    a = math.radians(shape.rotation_deg)
+    cx, cy = shape.center
+    return cx + lx * math.cos(a) - ly * math.sin(a), cy + lx * math.sin(a) + ly * math.cos(a)
+
+
+def matrix_rows(patch: Patch, ids, scale: float, max_lines: int = 96) -> list:
+    """Сетка клеток выбранных матриц (как у движка: строка 0 — верх) и точка первой ячейки по раскладке."""
+    from dsm_core.cells import matrix_order
+    rows = []
+    for fx in patch.fixtures:
+        if fx.id not in set(ids) or not isinstance(fx.shape, RectShape):
+            continue
+        ft = next((t for t in patch.fixture_types if t.id == fx.type_id), None)
+        if ft is None or ft.kind != FixtureKind.MATRIX:
+            continue
+        s, w, h = fx.shape, ft.width, ft.height
+        hw, hh = s.size[0] / 2, s.size[1] / 2
+        lw = 0.6 * scale
+        if w + h <= max_lines:
+            for c in range(1, w):
+                x = -hw + c * s.size[0] / w
+                rows.append(_line_row(_rect_local(s, x, -hh), _rect_local(s, x, hh), lw, (0.8, 0.8, 0.85), 0.5))
+            for r in range(1, h):
+                y = hh - r * s.size[1] / h
+                rows.append(_line_row(_rect_local(s, -hw, y), _rect_local(s, hw, y), lw, (0.8, 0.8, 0.85), 0.5))
+        g = matrix_order(w, h, ft.layout)[0]
+        r0, c0 = divmod(g, w)
+        q = _rect_local(s, -hw + (c0 + 0.5) * s.size[0] / w, hh - (r0 + 0.5) * s.size[1] / h)
+        d = max(min(s.size[0] / w, s.size[1] / h) * 0.6, HANDLE_PX * scale)
+        rows.append(_line_row((q[0] - d / 2, q[1]), (q[0] + d / 2, q[1]), d, (0.2, 1.0, 0.4), 0.9))
+    return rows

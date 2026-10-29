@@ -150,3 +150,23 @@ def test_snap_angle_15():
     assert abs(math.degrees(math.atan2(y, x)) - 15) < 1e-9 and abs(math.hypot(x, y) - math.hypot(100, 30)) < 1e-9
     x, y = me.snap_angle((0, 0), (10, 100))                      # ~84° → 90°
     assert abs(x) < 1e-9
+
+
+
+def test_matrix_type_line_rect_and_grid():
+    p = _patch()
+    q, tid = me.new_matrix_type(p, 144, 3, "tl_rows_snake")
+    ft = next(t for t in q.fixture_types if t.id == tid)
+    assert ft.kind.value == "matrix" and ft.cells == 432 and ft.width == 144 and me.is_matrix(q, tid)
+    r = me.line_to_rect((0, 0), (0, 144), 144, 3)
+    assert r.center == (0.0, 72.0) and abs(r.size[0] - 144) < 1e-9 and abs(r.size[1] - 3) < 1e-9 and r.rotation_deg == 90.0
+    q, fid = me.new_fixture(q, tid, me.line_to_rect((100, 100), (100, 244), 144, 3), "out1")
+    assert api.validate(q) is not None
+    grid = me.matrix_rows(q, [fid], 1.0)
+    assert len(grid) == 143 + 2 + 1 or len(grid) == 1          # сетка (если не слишком частая) + первая ячейка
+    q2, t2 = me.new_matrix_type(p, 8, 8, "br_cols")
+    q2, f2 = me.new_fixture(q2, t2, me.rect_shape((0, 0), (80, 80)), None)
+    rows = me.matrix_rows(q2, [f2], 1.0)
+    assert len(rows) == 7 + 7 + 1
+    first = rows[-1]                                          # br_cols: старт — правый нижний угол → клетка (75, 5)
+    assert abs(float(first[0]) + float(first[3]) / 2 - 75) < 1e-6 and abs(float(first[1]) - 5) < 1e-6

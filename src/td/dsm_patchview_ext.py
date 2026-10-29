@@ -656,6 +656,7 @@ class DsmPatchViewExt:
             self._write_render()
             self._write_overlay()
             self._write_list()
+            self._sync_types()
             self.last_rebuild_ms = (time.perf_counter() - t0) * 1000.0
             eng.WriteInfo()
             return
@@ -684,6 +685,7 @@ class DsmPatchViewExt:
         self._write_render()
         self._write_overlay()
         self._write_list()
+        self._sync_types()
         self.last_rebuild_ms = (time.perf_counter() - t0) * 1000.0
         eng.WriteInfo()
 
@@ -896,10 +898,13 @@ class DsmPatchViewExt:
             elif m == "draw":
                 p1, p2 = ed["p1"], ed["p2"]
                 if (p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2 >= (8 * scale) ** 2:
-                    type_id, out = ui.par.Addtype.eval(), self.CurrentOutput()
-                    new_id = eng.api.next_ids(eng.patch, "fixture")[0]
-                    if self._edit(lambda p: me.new_line(p, type_id, p1, p2, out)[0], f"новая {new_id} ({type_id})"):
-                        self._set_selection([new_id], notify=True)
+                    type_id = ui.par.Addtype.eval()
+                    ft = next((x for x in eng.patch.fixture_types if x.id == type_id), None)
+                    if ft is not None and me.is_matrix(eng.patch, type_id):         # матрица вдоль линии: W вдоль, H поперёк
+                        self._create(me.line_to_rect(p1, p2, ft.width, ft.height), f"матрица {ft.width}×{ft.height}")
+                    else:
+                        from dsm_core.model import LineShape
+                        self._create(LineShape(p1=p1, p2=p2), "линия")
             elif m == "drag" and abs(ed["dx"]) + abs(ed["dy"]) > 0.01:
                 ids, handle, dx, dy = ed["ids"], ed["handle"], ed["dx"], ed["dy"]
                 if handle in ("p1", "p2"):
@@ -1093,7 +1098,11 @@ class DsmPatchViewExt:
         elif name == "Type":
             v = str(par.eval())
             if v and v != "none" and v != fx.type_id:
-                self._edit(lambda p: api.update_fixture(p, fid, type_id=v), f"{fid}: профиль {v}", subject=fid)
+                ft = next((x for x in eng.patch.fixture_types if x.id == v), None)
+                changes = {"type_id": v}
+                if ft is not None and me.is_matrix(eng.patch, v) and hasattr(fx.shape, "p1"):
+                    changes["shape"] = me.line_to_rect(fx.shape.p1, fx.shape.p2, ft.width, ft.height)  # линия → матрица
+                self._edit(lambda p: api.update_fixture(p, fid, **changes), f"{fid}: профиль {v}", subject=fid)
         elif name == "Reverse":
             want = "reverse" if par.eval() else "forward"
             if fx.direction.value != want:
@@ -1200,6 +1209,7 @@ class DsmPatchViewExt:
             if bb is not None:
                 rows += me.frame_rows(bb, scale)
         rows += extra_rect
+        rows += me.matrix_rows(ghost, self.selection, scale)
         if bool(ui.par.Locating):                                    # мигающие на живом свете — жёлтой обводкой на холсте
             for fx in ghost.fixtures:
                 if fx.id in self.selection:
@@ -1335,6 +1345,20 @@ class DsmPatchViewExt:
         self._write_status()
         return ok
 
+    def MapNewMatrixType(self) -> bool:
+        """Новый матричный профиль W×H из панели инструментов; становится профилем новых фикстур."""
+        ui, eng = self._mui(), self._engine()
+        if ui is None or not self._can_edit("Профиль"):
+            return False
+        w, h, lay, order = int(ui.par.Mtxw), int(ui.par.Mtxh), ui.par.Mtxlayout.eval(), ui.par.Mtxorder.eval()
+        me = self._me()
+        tid = eng.api.next_ids(eng.patch, "fixture_type")[0]
+        ok = self._edit(lambda p: me.new_matrix_type(p, w, h, lay, order)[0], f"профиль {tid}: матрица {w}×{h} {lay}")
+        if ok:
+            self._sync_types()
+            ui.par.Addtype = tid
+        return ok
+
     def MapPaste(self) -> bool:
         """Вставка скопированного (Ctrl+V): копии со сдвигом на шаг сетки (минимум 20 px холста); новые выбираются."""
         ids = [i for i in getattr(self, "_clip", []) if any(f.id == i for f in self._engine().patch.fixtures)]
@@ -1392,7 +1416,7 @@ class DsmPatchViewExt:
     def _sync_types(self) -> None:
         """Меню профилей для инструмента «линия» — из патча."""
         ui, patch = self._mui(), self._engine().patch
-        if ui is None or patch is None:
+        if ui is None or patch is None or not patch.fixture_types:
             return
         types = [t for t in patch.fixture_types]
         par = ui.par.Addtype
