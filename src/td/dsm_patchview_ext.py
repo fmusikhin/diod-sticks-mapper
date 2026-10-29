@@ -1037,7 +1037,7 @@ class DsmPatchViewExt:
             insp.par.Type.menuNames = [t.id for t in patch.fixture_types] or ["none"]
             insp.par.Type.menuLabels = [t.name for t in patch.fixture_types] or ["—"]
             insp.par.Output.menuNames = ["none"] + [o.id for o in patch.outputs]   # пустое имя пункта TD не принимает
-            insp.par.Output.menuLabels = ["— без выхода"] + [o.name for o in patch.outputs]
+            insp.par.Output.menuLabels = ["— no output"] + [o.name for o in patch.outputs]
             fx = next((f for f in patch.fixtures if self.selection and f.id == self.selection[0]), None)
             insp.par.Fixture = (fx.id + (f"  (+{len(self.selection) - 1})" if len(self.selection) > 1 else "")) if fx else ""
             if fx is None:
