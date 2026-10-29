@@ -143,6 +143,9 @@ class DsmPatchViewExt:
         self._fill_editors()
         self._fill_insp()
         self._sync_list_selection()
+        ui = self._mui()
+        if ui is not None and bool(ui.par.Locatesel):
+            self.MapLocate(bool(sel))
         if notify:
             self._engine().CallUser("onSelect", list(sel))
 
@@ -1185,6 +1188,12 @@ class DsmPatchViewExt:
             if bb is not None:
                 rows += me.frame_rows(bb, scale)
         rows += extra_rect
+        if bool(ui.par.Locating):                                    # мигающие на живом свете — жёлтой обводкой на холсте
+            for fx in ghost.fixtures:
+                if fx.id in self.selection:
+                    pts, closed = me.outline(fx.shape)
+                    rows += [me._line_row(a, b, me.LINE_PX * 3 * scale, (1.0, 0.9, 0.1), 0.6)
+                             for a, b in zip(pts, pts[1:] + (pts[:1] if closed else []))]
         if getattr(self, "_poly", None):
             rows += me.poly_rows(self._poly["pts"], self._poly.get("cursor"), scale)
         if ed and ed["mode"] == "box":
@@ -1192,6 +1201,7 @@ class DsmPatchViewExt:
         if ed and ed["mode"] == "drag" and ed.get("mark") is not None:
             rows += me.mark_rows(ed["mark"], scale)
         self._write("me_overlay", rows)
+        self._write("me_labels", me.label_rows(ghost, scale, bad=bad) if bool(ui.par.Showlabels) else [me.LABEL_SPEC_COLUMNS])
 
     def MapDuplicate(self, dx: float, dy: float, count: int = 1) -> bool:
         """Массив: копии выбранных со сдвигом (dx, dy) × count; новые выбираются."""
@@ -1273,10 +1283,33 @@ class DsmPatchViewExt:
             ui.par.Tool = "select"
         elif not ctrl and k == "l":
             ui.par.Tool = "line"
+        elif not ctrl and k == "b":
+            self.MapLocate()
         elif not ctrl and k == "p":
             ui.par.Tool = "poly"
         elif not ctrl and k == "r":
             ui.par.Tool = "rect"
+
+    def MapLocate(self, on: bool | None = None) -> bool:
+        """Locate выбранных (как «мигнуть» фикстурой на живом свете): включить — цель = выбор, режим пары Mode
+        страницы Locate; выключить — снять. ``on=None`` — переключить."""
+        loc = self.ownerComp.ext.DsmLocateExt
+        active = loc.state.target is not None and bool(loc.state.target.fixtures)
+        on = (not active) if on is None else on
+        ui = self._mui()
+        if not on or not self.selection:
+            loc.Clear()
+            if ui is not None:
+                ui.par.Locating = False
+            self.message = "Locate снят"
+            self._write_status()
+            return False
+        ok = loc.Locate(",".join(self.selection))
+        if ui is not None:
+            ui.par.Locating = ok              # подсветка кнопки — по паре (атрибут расширения TD не отслеживает)
+        self.message = f"Locate: {' '.join(self.selection[:6])}" + ("" if ok else " — не разобран")
+        self._write_status()
+        return ok
 
     def MapPaste(self) -> bool:
         """Вставка скопированного (Ctrl+V): копии со сдвигом на шаг сетки (минимум 20 px холста); новые выбираются."""

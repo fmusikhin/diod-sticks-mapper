@@ -131,3 +131,13 @@ def test_tools_poly_rect_between():
     xs = [_fx(q, i).shape.p1[0] for i in ids]
     assert xs == [140.0, 160.0, 180.0] and all(_fx(q, i).type_id == "stick" for i in ids)
     assert len(me.poly_rows([(0, 0), (10, 0)], (10, 10), 1.0)) == 2 + 2
+
+
+
+def test_label_rows():
+    p = _patch()
+    rows = me.label_rows(p, 2.0, bad={"fx3"})
+    assert rows[0] == me.LABEL_SPEC_COLUMNS and len(rows) == 1 + len(p.fixtures)
+    r1 = next(r for r in rows[1:] if r[0].startswith("fx1 "))
+    assert r1[0] == "fx1 · 0:1" and r1[1:4] == ["128.00", "92.00", "22.000"]
+    assert next(r for r in rows[1:] if r[0].startswith("fx3 "))[4:6] == ["1", "0.45"]

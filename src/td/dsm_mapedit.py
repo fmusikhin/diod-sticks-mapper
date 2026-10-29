@@ -502,3 +502,25 @@ def poly_rows(points, cursor, scale: float) -> list:
     for q in points:
         rows.append(_line_row((q[0] - hs / 2, q[1]), (q[0] + hs / 2, q[1]), hs, DRAG_RGB))
     return rows
+
+
+
+# ---------- подписи на холсте ----------
+LABEL_SPEC_COLUMNS = ["text", "tx", "ty", "fontsize", "fontcolorr", "fontcolorg", "fontcolorb", "fontalpha"]
+
+
+def label_rows(patch: Patch, scale: float, px: float = 11.0, bad=frozenset()) -> list:
+    """Geo Text (specdat): у начала каждой фикстуры «id · юниверс:канал» (размер постоянный на экране)."""
+    rows = [list(LABEL_SPEC_COLUMNS)]
+    fs = px * scale
+    for fx in patch.fixtures:
+        pts, _ = outline(fx.shape)
+        if not pts:
+            continue
+        x, y = pts[0]
+        a = fx.address
+        addr = f"{a.universe}:{a.channel}" if a.universe is not None and a.channel is not None else "—"
+        rgb = (1.0, 0.45, 0.45) if fx.id in bad else (1.0, 1.0, 1.0)
+        rows.append([f"{fx.id} · {addr}", f"{x + 4 * scale:.2f}", f"{y - 4 * scale:.2f}", f"{fs:.3f}",
+                     f"{rgb[0]:g}", f"{rgb[1]:g}", f"{rgb[2]:g}", "0.95"])
+    return rows
