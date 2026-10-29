@@ -417,3 +417,29 @@ def mark_rows(q, scale: float, rgb=(1.0, 0.2, 0.9)) -> list:
     s = 10 * scale
     return [_line_row((q[0] - s, q[1]), (q[0] + s, q[1]), 1.5 * scale, rgb),
             _line_row((q[0], q[1] - s), (q[0], q[1] + s), 1.5 * scale, rgb)]
+
+
+def _base_name(name: str) -> tuple[str, int | None]:
+    """«Стик 5 (1) (3)» → («Стик», 5): убрать хвосты копий « (n)» и номер в конце."""
+    import re
+    s = re.sub(r"(\s*\(\d+\))+$", "", name).strip()
+    m = re.match(r"^(.*?)[\s_-]*(\d+)$", s)
+    return (m.group(1).strip() or s, int(m.group(2))) if m else (s, None)
+
+
+def renumber(patch: Patch, ids) -> Patch:
+    """Имена новых фикстур (копии массива/вставки): база имени + следующий свободный номер — «Стик 9», «Стик 10»."""
+    used: dict[str, int] = {}
+    new = set(ids)
+    for f in patch.fixtures:
+        if f.id in new:
+            continue
+        b, n = _base_name(f.name)
+        used[b] = max(used.get(b, 0), n or 0)
+    p = patch
+    for fid in ids:
+        fx = next(f for f in p.fixtures if f.id == fid)
+        b, _n = _base_name(fx.name)
+        used[b] = used.get(b, 0) + 1
+        p = update_fixture(p, fid, name=f"{b} {used[b]}")
+    return p

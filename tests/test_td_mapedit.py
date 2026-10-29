@@ -109,3 +109,11 @@ def test_frame_scale_rotate_and_snap():
     dx, dy, t = me.snap_delta([(0, 0)], [(10, 3)], 8, 2, 5)
     assert (dx, dy, t) == (10, 3, (10, 3))
     assert me.snap_delta([(0, 0)], [(50, 50)], 8, 2, 5) == (8, 2, None)
+
+
+def test_renumber_copies():
+    p = _patch()
+    q, ids = api.duplicate_fixtures(p, ["fx1"], 10, 0, 3)
+    q = me.renumber(q, ids)
+    assert [_fx(q, i).name for i in ids] == ["Стик 10", "Стик 11", "Стик 12"]   # в примере есть «Стик 9»
+    assert me._base_name("Стик 5 (1) (3)") == ("Стик", 5)

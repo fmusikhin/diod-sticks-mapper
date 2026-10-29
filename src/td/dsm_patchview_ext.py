@@ -28,7 +28,8 @@ class DsmPatchViewExt:
         self.output_id: str | None = None      # выбранный выход карты; None — все
         self.zoom_row: int | None = None       # строка крупного юниверса
         self.selection: tuple[str, ...] = ()   # выбранные фикстуры
-        self.undo_doc = None                   # документ файла до последней правки (одна ступень отмены)
+        self._undo: list = []                  # документы файла до правок (стек отмены, до 50 шагов)
+        self._redo: list = []                  # документы, снятые отменой (стек повтора)
         self._undo_file: tuple[str, float] = ("", 0.0)   # (файл, дата нашей записи) — к чему применима отмена
         self.message: str = ""
         self.layout = None                     # MapLayout текущего патча и выхода (для попадания и предпросмотра)
@@ -140,6 +141,8 @@ class DsmPatchViewExt:
         self.selection = sel
         self._rebuild()
         self._fill_editors()
+        self._fill_insp()
+        self._sync_list_selection()
         if notify:
             self._engine().CallUser("onSelect", list(sel))
 
@@ -334,19 +337,35 @@ class DsmPatchViewExt:
     def ReorderPort(self, output_id: str, port_id: str, fixture_ids: list[str]) -> bool:
         return self._not_yet("ReorderPort")
 
+    @property
+    def undo_doc(self):
+        return self._undo[-1] if self._undo else None
+
     def Undo(self) -> bool:
-        """Отменить последнюю правку (4.9): вернуть документ файла до неё — одна ступень. Отмена действует, только пока
-        файл — тот же и не менялся после правки (иначе затёрла бы чужое); работает и при ошибке загрузки после записи."""
-        if self.undo_doc is None:
-            return self._fail("Undo: нечего отменять", notify=False)
+        """Отменить правку (Ctrl+Z): вернуть документ файла до неё; многошагово (до 50). Действует, только пока файл —
+        тот же и не менялся снаружи после нашей записи (иначе затёрла бы чужое); работает и при ошибке загрузки."""
+        return self._step_history(self._undo, "undo", "отмена")
+
+    def Redo(self) -> bool:
+        """Повторить отменённое (Ctrl+Shift+Z / Ctrl+Y)."""
+        return self._step_history(self._redo, "redo", "повтор")
+
+    def _step_history(self, stack: list, kind: str, label: str) -> bool:
+        name = "Undo" if kind == "undo" else "Redo"
+        if not stack:
+            return self._fail(f"{name}: {'нечего отменять' if kind == 'undo' else 'нечего повторять'}", notify=False)
         eng = self._engine()
         if eng.patch is None:
-            return self._fail("Undo: патч не загружен")
+            return self._fail(f"{name}: патч не загружен")
         if not self._undo_valid():
             self._drop_undo()
-            return self._fail("Undo: файл патча сменился или изменён после правки — отмена недоступна")
-        doc = self.undo_doc
-        return self._edit(lambda p: doc, "отмена", keep_undo=False)   # запись отмены снимает undo_doc
+            return self._fail(f"{name}: файл патча сменился или изменён после правки — история недоступна")
+        doc = stack.pop()
+        ok = self._edit(lambda p: doc, f"{label} ({len(self._undo) if kind == 'undo' else len(self._redo)} в запасе)",
+                        history=kind)
+        if not ok:
+            stack.append(doc)
+        return ok
 
     def ExportSheet(self, path: str | None = None) -> str:
         """Лист адресов CSV (7.1): по умолчанию рядом с патчем ``<имя>_addresses.csv``; путь файла или "" при ошибке."""
@@ -371,8 +390,8 @@ class DsmPatchViewExt:
     def OnPatchLoaded(self, patch, issues) -> None:
         """Слушатель движка: перестройка таблиц карты; выбранный выход и крупный юниверс сохраняются, если есть (1.3).
         Отмена привязана к файлу и дате своей записи — загрузка другого или изменённого файла её снимает."""
-        if self.undo_doc is not None and not self._undo_valid():
-            self._drop_undo()
+        if self.undo_doc is not None and not getattr(self, "_writing", False) and not self._undo_valid():
+            self._drop_undo()                  # чужая загрузка или внешняя правка файла — история недействительна
         self._grab, self._drop, self.place_id = None, None, None     # раскладка сменилась — жест и размещение сброшены
         self._ed = None
         self._write("pv_preview", [self.logic.RECT_COLUMNS])
@@ -526,7 +545,7 @@ class DsmPatchViewExt:
             return False
         return True
 
-    def _edit(self, edit, label: str, keep_undo: bool = True, subject: str | None = None,
+    def _edit(self, edit, label: str, history: str = "push", subject: str | None = None,
               skip: set[str] | None = None) -> bool:
         """Правка ядра → запись файла движком с пересборкой → перестройка по слушателю → «сдвинулось N» (4.8).
         Отказ ядра или записи: файл, патч и карта прежние, причина в статусе и onOutputError; undo_doc не трогается.
@@ -539,21 +558,29 @@ class DsmPatchViewExt:
             mtime0 = os.path.getmtime(full)
         except Exception as e:  # файл исчез или не читается — правку не начинаем
             return self._fail(f"правка: файл патча не читается: {e}")
-        ok = eng.SavePatch(edit, True)
+        self._writing = True                   # своя запись: слушатель загрузки не должен сбрасывать историю
+        try:
+            ok = eng.SavePatch(edit, True)
+        finally:
+            self._writing = False
         try:
             mtime1 = os.path.getmtime(full)
         except OSError:
             mtime1 = mtime0
         written = mtime1 != mtime0
         if written:                                                  # файл переписан (загрузка могла и не пройти)
-            if keep_undo:
-                self.undo_doc, self._undo_file = snapshot, (full, mtime1)
+            self._undo_file = (full, mtime1)
+            if history == "push":
+                self._undo = (self._undo + [snapshot])[-50:]
+                self._redo = []
+            elif history == "undo":
+                self._redo.append(snapshot)
             else:
-                self._drop_undo()
+                self._undo.append(snapshot)
         if not ok:                                                   # движок уже вызвал onOutputError — второй раз не зовём
             if not written:
                 return self._fail(f"правка не записана: {eng.message}", notify=False)
-            hint = "; Undo вернёт прежний файл" if keep_undo else ""
+            hint = "; Undo вернёт прежний файл"
             return self._fail(f"правка записана, но патч не загрузился: {eng.message}{hint}", notify=False)
         skip = set(skip or ()) | ({subject} if subject else set())
         both = {f.id for f in before.fixtures} & {f.id for f in eng.patch.fixtures}   # новые и удалённые — не «сдвиг»
@@ -562,6 +589,7 @@ class DsmPatchViewExt:
         self._write("pv_status", self._status_rows(eng, *self._counts))   # таблицы уже перестроены слушателем загрузки
         eng.WriteInfo()
         self._fill_editors()
+        self._fill_insp()
         return True
 
     def _fill_editors(self) -> None:
@@ -595,7 +623,7 @@ class DsmPatchViewExt:
             return False
 
     def _drop_undo(self) -> None:
-        self.undo_doc, self._undo_file = None, ("", 0.0)
+        self._undo, self._redo, self._undo_file = [], [], ("", 0.0)
 
     def _fail(self, message: str, notify: bool = True) -> bool:
         """Команда отклонена: причина в статусе панели, info и onOutputError (4.7); ``notify=False`` — колбэк уже вызван."""
@@ -624,6 +652,7 @@ class DsmPatchViewExt:
             self._write("pv_status", self._status_rows(eng, 0, 0))
             self._write_render()
             self._write_overlay()
+            self._write_list()
             self.last_rebuild_ms = (time.perf_counter() - t0) * 1000.0
             eng.WriteInfo()
             return
@@ -651,6 +680,7 @@ class DsmPatchViewExt:
         self._write("pv_status", self._status_rows(eng, errors, len(issues) - errors))
         self._write_render()
         self._write_overlay()
+        self._write_list()
         self.last_rebuild_ms = (time.perf_counter() - t0) * 1000.0
         eng.WriteInfo()
 
@@ -682,7 +712,8 @@ class DsmPatchViewExt:
     def _area(self) -> tuple[float, float]:
         """Размер области холста в пикселях экрана — из пар окна (геометрию панели не читаем)."""
         c = self._engine().patch.canvas
-        aw = float(self._mui().par.w) - float(self._mui().par.Sidew)
+        ui = self._mui()
+        aw = float(ui.par.w) - float(ui.par.Sidew) - float(ui.par.Listw)
         return aw, aw * c.height / max(c.width, 1)
 
     def _canvas_scale(self) -> tuple[float, float, float]:
@@ -880,6 +911,171 @@ class DsmPatchViewExt:
             return me.apply_transform(p, ed["ids"], piv, 1.0, 1.0, ed["deg"])
         return p
 
+
+    # ------------------------------------------------------------------ инспектор и список окна маппинга
+    INSP_GEOM = ("X1", "Y1", "X2", "Y2", "Length", "Angle")
+
+    def _insp(self):
+        ui = self._mui()
+        return ui.op("insp") if ui is not None else None
+
+    def _fill_insp(self) -> None:
+        """Инспектор — по первой выбранной фикстуре; меню профилей и выходов — из патча."""
+        insp, patch = self._insp(), self._engine().patch
+        if insp is None or patch is None:
+            return
+        was, self._in_insp = getattr(self, "_in_insp", False), True
+        try:
+            insp.par.Type.menuNames = [t.id for t in patch.fixture_types] or ["none"]
+            insp.par.Type.menuLabels = [t.name for t in patch.fixture_types] or ["—"]
+            insp.par.Output.menuNames = ["none"] + [o.id for o in patch.outputs]   # пустое имя пункта TD не принимает
+            insp.par.Output.menuLabels = ["— без выхода"] + [o.name for o in patch.outputs]
+            fx = next((f for f in patch.fixtures if self.selection and f.id == self.selection[0]), None)
+            insp.par.Fixture = (fx.id + (f"  (+{len(self.selection) - 1})" if len(self.selection) > 1 else "")) if fx else ""
+            if fx is None:
+                return
+            me = self._me()
+            s = fx.shape
+            insp.par.Name = fx.name
+            insp.par.Type = fx.type_id
+            if hasattr(s, "p1"):
+                (x1, y1), (x2, y2) = s.p1, s.p2
+            else:
+                bb = me.sel_bbox(patch, [fx.id])
+                x1, y1, x2, y2 = bb
+            insp.par.X1, insp.par.Y1, insp.par.X2, insp.par.Y2 = round(x1, 2), round(y1, 2), round(x2, 2), round(y2, 2)
+            insp.par.Length = round(((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5, 2)
+            import math
+            insp.par.Angle = round(math.degrees(math.atan2(y2 - y1, x2 - x1)), 2)
+            insp.par.Reverse = fx.direction.value == "reverse"
+            insp.par.Mute = bool(fx.mute)
+            insp.par.Output = fx.address.output_id or "none"
+            insp.par.Universe = fx.address.universe if fx.address.universe is not None else 0
+            insp.par.Channel = fx.address.channel if fx.address.channel is not None else 1
+        finally:
+            self._in_insp = was
+
+    def MapInspector(self, par) -> None:
+        """Правка из инспектора: значение пары → правка ядра общим путём (геометрия, имя, профиль, направление, mute,
+        адрес). Пульсы: Apply — ручной адрес, Toauto — в авто на выбранном выходе."""
+        if getattr(self, "_in_insp", False):
+            return
+        eng, insp = self._engine(), self._insp()
+        if eng.patch is None or insp is None or not self.selection:
+            return
+        fid = self.selection[0]
+        fx = next((f for f in eng.patch.fixtures if f.id == fid), None)
+        if fx is None:
+            return
+        name, api, me = par.name, eng.api, self._me()
+        import math
+        from dataclasses import replace as _replace
+        if name in self.INSP_GEOM:
+            x1, y1, x2, y2 = (float(insp.par[n]) for n in ("X1", "Y1", "X2", "Y2"))
+            if name in ("Length", "Angle"):
+                if hasattr(fx.shape, "p1"):
+                    (ax, ay), (bx, by) = fx.shape.p1, fx.shape.p2
+                    cur_l, cur_a = math.hypot(bx - ax, by - ay), math.degrees(math.atan2(by - ay, bx - ax))
+                    if abs(cur_l - float(insp.par.Length)) < 0.01 and abs(cur_a - float(insp.par.Angle)) < 0.01:
+                        return
+                L, a = float(insp.par.Length), math.radians(float(insp.par.Angle))
+                x2, y2 = x1 + L * math.cos(a), y1 + L * math.sin(a)
+            if hasattr(fx.shape, "p1"):
+                shape = _replace(fx.shape, p1=(x1, y1), p2=(x2, y2))
+                same = max(abs(x1 - fx.shape.p1[0]), abs(y1 - fx.shape.p1[1]), abs(x2 - fx.shape.p2[0]),
+                           abs(y2 - fx.shape.p2[1])) < 0.01
+            else:
+                bb = me.sel_bbox(eng.patch, [fid])
+                shape = me.shift_shape(fx.shape, x1 - bb[0], y1 - bb[1])
+                same = abs(x1 - bb[0]) + abs(y1 - bb[1]) < 0.01
+            if same:          # отложенное эхо заполнения инспектора (или округление) — не правка
+                return
+            self._edit(lambda p: api.update_fixture(p, fid, shape=shape), f"{fid}: геометрия", subject=fid)
+        elif name == "Name":
+            v = str(par.eval()).strip()
+            if v and v != fx.name:
+                self._edit(lambda p: api.update_fixture(p, fid, name=v), f"{fid}: имя «{v}»", subject=fid)
+        elif name == "Type":
+            v = str(par.eval())
+            if v and v != "none" and v != fx.type_id:
+                self._edit(lambda p: api.update_fixture(p, fid, type_id=v), f"{fid}: профиль {v}", subject=fid)
+        elif name == "Reverse":
+            want = "reverse" if par.eval() else "forward"
+            if fx.direction.value != want:
+                self._edit(lambda p: me.reverse(p, [fid]), f"{fid}: направление {want}", subject=fid)
+        elif name == "Mute":
+            v = bool(par.eval())
+            if v != bool(fx.mute):
+                self._edit(lambda p: api.update_fixture(p, fid, mute=v), f"{fid}: mute {'вкл' if v else 'выкл'}", subject=fid)
+        elif name == "Apply":
+            out = insp.par.Output.eval()
+            if out in ("", "none"):
+                self._fail("адрес: выберите выход", notify=False)
+            else:
+                self.ReAddress(fid, out, insp.par.Universe.eval(), insp.par.Channel.eval())
+        elif name == "Toauto":
+            out = insp.par.Output.eval()
+            self.ToAuto(fid, None if out in ("", "none") else out)
+        self._fill_insp()
+
+    def _write_list(self) -> None:
+        """Таблица me_list для списка фикстур окна маппинга: порядок патча, адрес, состояние вывода."""
+        if self._mui() is None:
+            return
+        eng = self._engine()
+        rows = [["id", "name", "type", "addr", "state"]]
+        if eng.patch is not None:
+            bad = {f for i in eng.issues if i.level.value == "error" for f in i.fixture_ids}
+            for f in eng.patch.fixtures:
+                a = f.address
+                addr = f"{a.output_id} {a.universe}:{a.channel}" if a.output_id and a.universe is not None else (a.output_id or "—")
+                rows.append([f.id, f.name, f.type_id, addr, "✕" if f.id in bad else ("m" if f.mute else "")])
+        self._write("me_list", rows)
+
+    def MapRename(self, fixture_id: str, name: str) -> bool:
+        """Переименовать фикстуру (список — двойной клик по имени, инспектор — поле «Имя»)."""
+        name = (name or "").strip()
+        eng = self._engine()
+        fx = next((f for f in eng.patch.fixtures if f.id == fixture_id), None) if eng.patch is not None else None
+        if fx is None or not name or name == fx.name or not self._can_edit("Имя"):
+            return False
+        api = eng.api
+        return self._edit(lambda p: api.update_fixture(p, fixture_id, name=name), f"{fixture_id}: имя «{name}»",
+                          subject=fixture_id)
+
+    def ListSelect(self, ids) -> None:
+        """Выбор строками списка → выбор на холсте (без обратной записи в список)."""
+        if getattr(self, "_list_sync", False):
+            return
+        self._from_list = True
+        try:
+            self._set_selection(list(ids), notify=True)
+        finally:
+            self._from_list = False
+
+    def _sync_list_selection(self) -> None:
+        ui = self._mui()
+        if ui is None or getattr(self, "_from_list", False):
+            return
+        ls = ui.op("body_lr/list_col/lister")
+        if ls is None:
+            return
+        try:
+            ext = ls.ext.ListerExt
+            sel = set(self.selection)
+            self._list_sync = True
+            ext.SelectRow(None)
+            first = True
+            for r, d in enumerate(ext.Data):
+                obj = d.get("rowObject")
+                if isinstance(obj, dict) and obj.get("id") in sel:
+                    ext.SelectRow(r, addRow=not first)
+                    first = False
+        except Exception:  # список ещё не отрисован (лист без панели) — выбор на холсте важнее
+            pass
+        finally:
+            self._list_sync = False
+
     def _write_overlay(self) -> None:
         ui, eng = self._mui(), self._engine()
         if ui is None:
@@ -918,7 +1114,8 @@ class DsmPatchViewExt:
         count = max(1, int(count))
         new = eng.api.next_ids(eng.patch, "fixture", len(ids) * count)
         api = eng.api
-        ok = self._edit(lambda p: api.duplicate_fixtures(p, ids, float(dx), float(dy), count)[0],
+        me = self._me()
+        ok = self._edit(lambda p: me.renumber(api.duplicate_fixtures(p, ids, float(dx), float(dy), count)[0], new),
                         f"копии: {len(new)} шт. шаг {dx:+g} {dy:+g}", skip=set(new))
         if ok:
             self._set_selection(new, notify=True)
@@ -955,7 +1152,15 @@ class DsmPatchViewExt:
         elif ctrl and k == "a":
             self._set_selection([f.id for f in eng.patch.fixtures], notify=True)
         elif ctrl and k == "z":
-            self.Undo()
+            self.Redo() if shift else self.Undo()
+        elif ctrl and k == "y":
+            self.Redo()
+        elif ctrl and k == "c":
+            self._clip = list(self.selection)
+            self.message = f"скопировано: {len(self._clip)}"
+            self._write_status()
+        elif ctrl and k == "v":
+            self.MapPaste()
         elif k == "esc":
             self._ed = None
             self._set_selection([], notify=True)
@@ -968,6 +1173,19 @@ class DsmPatchViewExt:
             ui.par.Tool = "select"
         elif not ctrl and k == "l":
             ui.par.Tool = "line"
+
+    def MapPaste(self) -> bool:
+        """Вставка скопированного (Ctrl+V): копии со сдвигом на шаг сетки (минимум 20 px холста); новые выбираются."""
+        ids = [i for i in getattr(self, "_clip", []) if any(f.id == i for f in self._engine().patch.fixtures)]
+        if not ids:
+            return self._fail("Вставка: буфер пуст", notify=False)
+        step = max(20.0, float(self._mui().par.Snap)) if self._mui() is not None else 20.0
+        sel = self.selection
+        self.selection = tuple(ids)
+        ok = self.MapDuplicate(step, -step, 1)
+        if not ok:
+            self.selection = sel
+        return ok
 
     def MapDelete(self) -> bool:
         eng = self._engine()
