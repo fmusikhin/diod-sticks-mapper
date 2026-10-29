@@ -796,7 +796,7 @@ class DsmPatchViewExt:
         """Размер области холста в пикселях экрана — из пар окна (геометрию панели не читаем)."""
         c = self._engine().patch.canvas
         ui = self._mui()
-        aw = float(ui.par.w) - float(ui.par.Sidew) - float(ui.par.Listw)
+        aw = float(ui.par.w) - float(ui.par.Sidew) - float(ui.par.Listw) - float(ui.par.Splitw)
         return aw, float(ui.par.h) - float(ui.par.Headerh)          # холст на всю высоту под шапкой
 
     def _canvas_scale(self) -> tuple[float, float, float]:
@@ -1608,7 +1608,7 @@ class DsmPatchViewExt:
     def _map_size(self) -> tuple[float, float]:
         """Размер области карты в пикселях — из пар панели (не из геометрии панели: см. мануал, panel layout freeze)."""
         ui = self._ui()
-        return (float(ui.par.w) - float(ui.par.Sidew),
+        return (float(ui.par.w) - float(ui.par.Sidew) - float(ui.par.Splitw),
                 float(ui.par.h) - float(ui.par.Headerh) - float(ui.par.Zoomh))
 
     def _write_render(self) -> None:
