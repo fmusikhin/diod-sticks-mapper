@@ -894,7 +894,15 @@ class DsmPatchViewExt:
                 p1, p2 = ed["p1"], ed["p2"]
                 if abs(p2[0] - p1[0]) >= 8 * scale and (abs(p2[1] - p1[1]) >= 8 * scale or ed.get("square")):
                     shape = me.rect_shape(p1, p2, ed.get("square", False))
-                    self._create(shape, "прямоугольник")
+                    if not me.is_matrix(eng.patch, ui.par.Addtype.eval()):
+                        # прямоугольник с линейным профилем лёг бы одной линией по оси — сразу матрица W×H из панели
+                        if not self.MapNewMatrixType():
+                            self._write_overlay()
+                            return
+                        note = f" — профиль {ui.par.Addtype.eval()} {int(ui.par.Mtxw)}×{int(ui.par.Mtxh)} создан из панели"
+                    else:
+                        note = ""
+                    self._create(shape, "прямоугольник" + note)
             elif m == "draw":
                 p1, p2 = ed["p1"], ed["p2"]
                 if (p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2 >= (8 * scale) ** 2:
@@ -1130,10 +1138,12 @@ class DsmPatchViewExt:
         rows = [["id", "name", "type", "addr", "state"]]
         if eng.patch is not None:
             bad = {f for i in eng.issues if i.level.value == "error" for f in i.fixture_ids}
+            types = {t.id: t for t in eng.patch.fixture_types}
             for f in eng.patch.fixtures:
                 a = f.address
-                addr = f"{a.output_id} {a.universe}:{a.channel}" if a.output_id and a.universe is not None else (a.output_id or "—")
-                rows.append([f.id, f.name, f.type_id, addr, "✕" if f.id in bad else ("m" if f.mute else "")])
+                addr = f"{a.universe}:{a.channel}" if a.output_id and a.universe is not None else (a.output_id or "—")
+                rows.append([f.id, f.name, self._type_short(types.get(f.type_id)), addr,
+                             "✕" if f.id in bad else ("m" if f.mute else "")])
         self._write("me_list", rows)
 
     def MapRename(self, fixture_id: str, name: str) -> bool:
@@ -1146,6 +1156,13 @@ class DsmPatchViewExt:
         api = eng.api
         return self._edit(lambda p: api.update_fixture(p, fixture_id, name=name), f"{fixture_id}: имя «{name}»",
                           subject=fixture_id)
+
+    @staticmethod
+    def _type_short(ft) -> str:
+        """Профиль коротко: матрица — «W×H», остальные — «N px»."""
+        if ft is None:
+            return "?"
+        return f"{ft.width}×{ft.height}" if ft.kind.value == "matrix" else f"{ft.cells} px"
 
     def ListSelect(self, ids) -> None:
         """Выбор строками списка → выбор на холсте (без обратной записи в список)."""
@@ -1421,8 +1438,8 @@ class DsmPatchViewExt:
         types = [t for t in patch.fixture_types]
         par = ui.par.Addtype
         cur = par.eval()
-        par.menuNames = [t.id for t in types] or [""]
-        par.menuLabels = [t.name for t in types] or ["—"]
+        par.menuNames = [t.id for t in types] or ["none"]
+        par.menuLabels = [f"{t.id} — {t.name} ({self._type_short(t)})" for t in types] or ["—"]
         if cur not in par.menuNames:
             par.val = par.menuNames[0]
 
