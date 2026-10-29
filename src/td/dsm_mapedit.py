@@ -524,3 +524,14 @@ def label_rows(patch: Patch, scale: float, px: float = 11.0, bad=frozenset()) ->
         rows.append([f"{fx.id} · {addr}", f"{x + 4 * scale:.2f}", f"{y - 4 * scale:.2f}", f"{fs:.3f}",
                      f"{rgb[0]:g}", f"{rgb[1]:g}", f"{rgb[2]:g}", "0.95"])
     return rows
+
+
+
+def snap_angle(anchor, q, step_deg: float = 15.0):
+    """Точка q, повёрнутая вокруг anchor к ближайшему углу, кратному step_deg (длина сохраняется) — Shift при рисовании."""
+    dx, dy = q[0] - anchor[0], q[1] - anchor[1]
+    L = math.hypot(dx, dy)
+    if L == 0:
+        return q
+    a = math.radians(round(math.degrees(math.atan2(dy, dx)) / step_deg) * step_deg)
+    return (anchor[0] + L * math.cos(a), anchor[1] + L * math.sin(a))

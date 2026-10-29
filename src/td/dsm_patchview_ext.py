@@ -787,6 +787,7 @@ class DsmPatchViewExt:
                 self._ed = None
             return
         tool = ui.par.Tool.eval()
+        self._shift = shift
         if tool == "poly":
             self._poly_event(event, x, y, step, scale)
             return
@@ -800,7 +801,8 @@ class DsmPatchViewExt:
                 self._write_overlay()
                 return
             bbox = me.sel_bbox(eng.patch, self.selection) if self.selection else None
-            fh = me.hit_frame(bbox, x, y, scale) if bbox is not None else None
+            fid0, h0 = me.hit(eng.patch, x, y, 6.0 * scale, self.selection)
+            fh = None if h0 in ("p1", "p2") else (me.hit_frame(bbox, x, y, scale) if bbox is not None else None)  # концы линии важнее углов рамки
             if fh == "rot":
                 self._ed = {"mode": "rotate", "ids": list(self.selection), "bbox": bbox, "x0": x, "y0": y, "deg": 0.0}
                 return
@@ -835,15 +837,23 @@ class DsmPatchViewExt:
                 p1 = ed["p1"]
                 q = (me.snap(x, step), me.snap(y, step))
                 if shift and m == "draw":
-                    q = (q[0], p1[1]) if abs(q[0] - p1[0]) >= abs(q[1] - p1[1]) else (p1[0], q[1])
+                    q = me.snap_angle(p1, (x, y), 15.0)               # угол кратен 15°
                 ed["p2"], ed["square"] = q, shift
             elif m == "box":
                 ed["x1"], ed["y1"] = x, y
             elif m == "drag":
                 dx, dy = x - ed["x0"], y - ed["y0"]
+                ed["mark"] = None
+                if shift and ed["handle"] in ("p1", "p2"):             # конец линии: угол к другому концу кратен 15°
+                    fx = next(f for f in eng.patch.fixtures if f.id == ed["ids"][0])
+                    other = fx.shape.p2 if ed["handle"] == "p1" else fx.shape.p1
+                    cur = getattr(fx.shape, ed["handle"])
+                    q = me.snap_angle(other, (cur[0] + dx, cur[1] + dy), 15.0)
+                    ed["dx"], ed["dy"] = q[0] - cur[0], q[1] - cur[1]
+                    self._write_overlay()
+                    return
                 if shift:
                     dx, dy = (dx, 0.0) if abs(dx) >= abs(dy) else (0.0, dy)
-                ed["mark"] = None
                 if not alt:
                     if ed["handle"] in ("p1", "p2"):
                         fx = next(f for f in eng.patch.fixtures if f.id == ed["ids"][0])
@@ -924,6 +934,8 @@ class DsmPatchViewExt:
         me = self._me()
         q = (me.snap(x, step), me.snap(y, step))
         poly = getattr(self, "_poly", None)
+        if poly and getattr(self, "_shift", False):
+            q = me.snap_angle(poly["pts"][-1], (x, y), 15.0)
         if event in ("hover", "move"):
             if poly:
                 poly["cursor"] = q
@@ -1273,6 +1285,8 @@ class DsmPatchViewExt:
             self._write_overlay()
         elif k == "esc":
             self._ed = None
+            if bool(ui.par.Locating):
+                self.MapLocate(False)
             self._set_selection([], notify=True)
             self._write_overlay()
         elif not ctrl and k == "f":
@@ -1294,19 +1308,29 @@ class DsmPatchViewExt:
         """Locate выбранных (как «мигнуть» фикстурой на живом свете): включить — цель = выбор, режим пары Mode
         страницы Locate; выключить — снять. ``on=None`` — переключить."""
         loc = self.ownerComp.ext.DsmLocateExt
+        if getattr(self, "_in_locate", False):
+            return False
         active = loc.state.target is not None and bool(loc.state.target.fixtures)
         on = (not active) if on is None else on
         ui = self._mui()
         if not on or not self.selection:
             loc.Clear()
             if ui is not None:
-                ui.par.Locating = False
+                self._in_locate = True
+                try:
+                    ui.par.Locating = False
+                finally:
+                    self._in_locate = False
             self.message = "Locate снят"
             self._write_status()
             return False
         ok = loc.Locate(",".join(self.selection))
         if ui is not None:
-            ui.par.Locating = ok              # подсветка кнопки — по паре (атрибут расширения TD не отслеживает)
+            self._in_locate = True            # подсветка кнопки и переключатель — по паре окна (ext-атрибут TD не отслеживает)
+            try:
+                ui.par.Locating = ok
+            finally:
+                self._in_locate = False
         self.message = f"Locate: {' '.join(self.selection[:6])}" + ("" if ok else " — не разобран")
         self._write_status()
         return ok
@@ -1358,8 +1382,11 @@ class DsmPatchViewExt:
         ui.op("win").par.winopen.pulse()
 
     def MapClose(self) -> None:
+        """Закрыть окно маппинга; Locate снимается — после закрытия на площадке ничего не мигает."""
         ui = self._mui()
         if ui is not None:
+            if bool(ui.par.Locating):
+                self.MapLocate(False)
             ui.op("win").par.winclose.pulse()
 
     def _sync_types(self) -> None:

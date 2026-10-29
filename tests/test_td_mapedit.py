@@ -1,4 +1,5 @@
 """Редактор маппинга: чистая логика холста (src/td/dsm_mapedit.py)."""
+import math
 import pathlib
 
 from dsm_core import api
@@ -141,3 +142,11 @@ def test_label_rows():
     r1 = next(r for r in rows[1:] if r[0].startswith("fx1 "))
     assert r1[0] == "fx1 · 0:1" and r1[1:4] == ["128.00", "92.00", "22.000"]
     assert next(r for r in rows[1:] if r[0].startswith("fx3 "))[4:6] == ["1", "0.45"]
+
+
+
+def test_snap_angle_15():
+    x, y = me.snap_angle((0, 0), (100, 30))                      # ~16.7° → 15°
+    assert abs(math.degrees(math.atan2(y, x)) - 15) < 1e-9 and abs(math.hypot(x, y) - math.hypot(100, 30)) < 1e-9
+    x, y = me.snap_angle((0, 0), (10, 100))                      # ~84° → 90°
+    assert abs(x) < 1e-9
