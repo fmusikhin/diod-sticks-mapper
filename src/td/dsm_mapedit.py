@@ -443,3 +443,62 @@ def renumber(patch: Patch, ids) -> Patch:
         used[b] = used.get(b, 0) + 1
         p = update_fixture(p, fid, name=f"{b} {used[b]}")
     return p
+
+
+
+# ---------- инструменты: ломаная, прямоугольник, раскладка между двумя ----------
+
+def new_fixture(patch: Patch, type_id: str, shape, output_id: str | None, name: str | None = None) -> tuple[Patch, str]:
+    """Новая фикстура профиля ``type_id`` с фигурой ``shape``; на выходе ``output_id`` — в авто."""
+    fid = next_ids(patch, "fixture")[0]
+    ft = next(t for t in patch.fixture_types if t.id == type_id)
+    n = sum(1 for f in patch.fixtures if f.type_id == type_id) + 1
+    p = add_fixture(patch, Fixture(id=fid, name=name or f"{ft.name.split()[0]} {n}", type_id=type_id, shape=shape))
+    if output_id:
+        p = assign_to_output(p, fid, output_id)
+    return p, fid
+
+
+def poly_shape(points) -> PolylineShape:
+    return PolylineShape(points=tuple((float(x), float(y)) for x, y in points))
+
+
+def rect_shape(p0, p1, square: bool = False) -> RectShape:
+    """Прямоугольник по двум углам; ``square`` — квадрат по большей стороне."""
+    w, h = p1[0] - p0[0], p1[1] - p0[1]
+    if square:
+        s = max(abs(w), abs(h))
+        w, h = math.copysign(s, w or 1), math.copysign(s, h or 1)
+    return RectShape(center=(p0[0] + w / 2, p0[1] + h / 2), size=(abs(w), abs(h)), rotation_deg=0.0)
+
+
+def between(patch: Patch, id_a: str, id_b: str, count: int, output_id: str | None = None) -> tuple[Patch, list[str]]:
+    """N линий, равномерно разложенных между двумя линиями (концы интерполируются) — профиль, выход и направление
+    первой; имена продолжают нумерацию."""
+    a = next(f for f in patch.fixtures if f.id == id_a)
+    b = next(f for f in patch.fixtures if f.id == id_b)
+    if not (isinstance(a.shape, LineShape) and isinstance(b.shape, LineShape)):
+        raise ValueError("раскладка между: обе фикстуры должны быть линиями")
+    out = output_id if output_id is not None else a.address.output_id
+    p, ids = patch, []
+    for k in range(1, count + 1):
+        s = k / (count + 1)
+        lerp = lambda q0, q1: (q0[0] + (q1[0] - q0[0]) * s, q0[1] + (q1[1] - q0[1]) * s)  # noqa: E731
+        p, fid = new_fixture(p, a.type_id, LineShape(p1=lerp(a.shape.p1, b.shape.p1), p2=lerp(a.shape.p2, b.shape.p2)),
+                             out, name=a.name)
+        if a.direction != Direction.FORWARD:
+            p = update_fixture(p, fid, direction=a.direction)
+        ids.append(fid)
+    return renumber(p, ids), ids
+
+
+def poly_rows(points, cursor, scale: float) -> list:
+    """Рисуемая ломаная: отрезки по точкам, резинка до курсора, точки-ручки."""
+    rows = []
+    pts = list(points) + ([cursor] if cursor is not None else [])
+    for a, b in zip(pts, pts[1:]):
+        rows.append(_line_row(a, b, LINE_PX * 1.5 * scale, DRAG_RGB))
+    hs = HANDLE_PX * 0.8 * scale
+    for q in points:
+        rows.append(_line_row((q[0] - hs / 2, q[1]), (q[0] + hs / 2, q[1]), hs, DRAG_RGB))
+    return rows

@@ -783,11 +783,17 @@ class DsmPatchViewExt:
             elif event in ("up", "mup"):
                 self._ed = None
             return
+        tool = ui.par.Tool.eval()
+        if tool == "poly":
+            self._poly_event(event, x, y, step, scale)
+            return
+        if event == "hover":
+            return
         if event == "down":
             self._ed = None
-            if ui.par.Tool.eval() == "line":
+            if tool in ("line", "rect"):
                 p0 = (me.snap(x, step), me.snap(y, step))
-                self._ed = {"mode": "draw", "p1": p0, "p2": p0}
+                self._ed = {"mode": "draw" if tool == "line" else "rect", "p1": p0, "p2": p0}
                 self._write_overlay()
                 return
             bbox = me.sel_bbox(eng.patch, self.selection) if self.selection else None
@@ -822,12 +828,12 @@ class DsmPatchViewExt:
             return
         if event == "move":
             m = ed["mode"]
-            if m == "draw":
+            if m in ("draw", "rect"):
                 p1 = ed["p1"]
                 q = (me.snap(x, step), me.snap(y, step))
-                if shift:
+                if shift and m == "draw":
                     q = (q[0], p1[1]) if abs(q[0] - p1[0]) >= abs(q[1] - p1[1]) else (p1[0], q[1])
-                ed["p2"] = q
+                ed["p2"], ed["square"] = q, shift
             elif m == "box":
                 ed["x1"], ed["y1"] = x, y
             elif m == "drag":
@@ -869,6 +875,11 @@ class DsmPatchViewExt:
                     else:
                         sel = hit_ids
                     self._set_selection(sel, notify=True)
+            elif m == "rect":
+                p1, p2 = ed["p1"], ed["p2"]
+                if abs(p2[0] - p1[0]) >= 8 * scale and (abs(p2[1] - p1[1]) >= 8 * scale or ed.get("square")):
+                    shape = me.rect_shape(p1, p2, ed.get("square", False))
+                    self._create(shape, "прямоугольник")
             elif m == "draw":
                 p1, p2 = ed["p1"], ed["p2"]
                 if (p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2 >= (8 * scale) ** 2:
@@ -892,6 +903,75 @@ class DsmPatchViewExt:
                 piv, _a = me.rotate_angle(ed["bbox"], 0, 1, 0, 1)
                 self._edit(lambda p: me.apply_transform(p, ids, piv, 1.0, 1.0, deg), f"поворот {deg:+.1f}°")
             self._write_overlay()
+
+    def _create(self, shape, what: str) -> bool:
+        """Новая фикстура профиля из окна (Addtype) на текущем выходе в авто; выбирается."""
+        eng, ui, me = self._engine(), self._mui(), self._me()
+        type_id, out = ui.par.Addtype.eval(), self.CurrentOutput()
+        new_id = eng.api.next_ids(eng.patch, "fixture")[0]
+        ok = self._edit(lambda p: me.new_fixture(p, type_id, shape, out)[0], f"новая {new_id}: {what} ({type_id})")
+        if ok:
+            self._set_selection([new_id], notify=True)
+        return ok
+
+    def _poly_event(self, event: str, x: float, y: float, step: float, scale: float) -> None:
+        """Ломаная: клик — точка, двойной клик или клик по первой точке / Enter — готово, Backspace — убрать точку,
+        Esc — отмена; между кликами — резинка до курсора."""
+        import time as _t
+        me = self._me()
+        q = (me.snap(x, step), me.snap(y, step))
+        poly = getattr(self, "_poly", None)
+        if event in ("hover", "move"):
+            if poly:
+                poly["cursor"] = q
+                self._write_overlay()
+            return
+        if event != "down":
+            return
+        now = _t.perf_counter()
+        if poly is None:
+            self._poly = {"pts": [q], "cursor": q, "t": now}
+        else:
+            last, first = poly["pts"][-1], poly["pts"][0]
+            near = lambda a: abs(a[0] - q[0]) + abs(a[1] - q[1]) <= 8 * scale  # noqa: E731
+            if (now - poly["t"] < 0.35 and near(last)) or (len(poly["pts"]) > 2 and near(first)):
+                self.MapPolyFinish()
+                return
+            poly["pts"].append(q)
+            poly["t"] = now
+        self._write_overlay()
+
+    def MapPolyFinish(self) -> bool:
+        poly, self._poly = getattr(self, "_poly", None), None
+        if not poly or len(poly["pts"]) < 2:
+            self._write_overlay()
+            return False
+        me = self._me()
+        pts = poly["pts"]
+        from dsm_core.model import LineShape
+        shape = LineShape(p1=pts[0], p2=pts[1]) if len(pts) == 2 else me.poly_shape(pts)
+        ok = self._create(shape, f"ломаная {len(pts)} точек")
+        self._write_overlay()
+        return ok
+
+    def MapBetween(self, count: int) -> bool:
+        """Раскладка N линий между двумя выбранными линиями."""
+        if len(self.selection) != 2:
+            return self._fail("Между: выберите ровно две линии", notify=False)
+        if not self._can_edit("Между"):
+            return False
+        eng, me = self._engine(), self._me()
+        a, b = self.selection
+        count = max(1, int(count))
+        new = eng.api.next_ids(eng.patch, "fixture", count)
+        try:
+            me.between(eng.patch, a, b, count)
+        except (ValueError, KeyError) as e:
+            return self._fail(f"Между: {e}", notify=False)
+        ok = self._edit(lambda p: me.between(p, a, b, count)[0], f"между {a} и {b}: {count} шт.", skip=set(new))
+        if ok:
+            self._set_selection(new, notify=True)
+        return ok
 
     def _ghost(self):
         """Патч «как будет после жеста» для оверлея; без жеста — патч движка."""
@@ -1092,11 +1172,21 @@ class DsmPatchViewExt:
             ghost = eng.patch
         bad = {f for i in eng.issues if i.level.value == "error" for f in i.fixture_ids}   # не выводятся движком
         draw = (ed["p1"], ed["p2"]) if ed and ed["mode"] == "draw" else None
+        if ed and ed["mode"] == "rect":
+            r = me.rect_shape(ed["p1"], ed["p2"], ed.get("square", False))
+            c = me.outline(r)[0]
+            draw = None
+            extra_rect = [me._line_row(a, b, me.LINE_PX * 1.5 * scale, me.DRAG_RGB) for a, b in zip(c, c[1:] + c[:1])]
+        else:
+            extra_rect = []
         rows = me.overlay_rows(ghost, self.selection, scale, None, draw, bad)
         if self.selection and ui.par.Tool.eval() == "select":
             bb = me.sel_bbox(ghost, self.selection)
             if bb is not None:
                 rows += me.frame_rows(bb, scale)
+        rows += extra_rect
+        if getattr(self, "_poly", None):
+            rows += me.poly_rows(self._poly["pts"], self._poly.get("cursor"), scale)
         if ed and ed["mode"] == "box":
             rows += me.box_rows(ed["x0"], ed["y0"], ed["x1"], ed["y1"], scale)
         if ed and ed["mode"] == "drag" and ed.get("mark") is not None:
@@ -1142,7 +1232,7 @@ class DsmPatchViewExt:
             return
         k = key.lower()
         step = 10.0 if shift else 1.0
-        if k in ("delete", "backspace"):
+        if k == "delete" or (k == "backspace" and not getattr(self, "_poly", None)):
             self.MapDelete()
         elif k in ("left", "right", "up", "down"):
             dx, dy = {"left": (-step, 0), "right": (step, 0), "up": (0, step), "down": (0, -step)}[k]
@@ -1161,6 +1251,16 @@ class DsmPatchViewExt:
             self._write_status()
         elif ctrl and k == "v":
             self.MapPaste()
+        elif k in ("enter", "return") and getattr(self, "_poly", None):
+            self.MapPolyFinish()
+        elif k == "backspace" and getattr(self, "_poly", None):
+            self._poly["pts"] = self._poly["pts"][:-1]
+            if not self._poly["pts"]:
+                self._poly = None
+            self._write_overlay()
+        elif k == "esc" and getattr(self, "_poly", None):
+            self._poly = None
+            self._write_overlay()
         elif k == "esc":
             self._ed = None
             self._set_selection([], notify=True)
@@ -1173,6 +1273,10 @@ class DsmPatchViewExt:
             ui.par.Tool = "select"
         elif not ctrl and k == "l":
             ui.par.Tool = "line"
+        elif not ctrl and k == "p":
+            ui.par.Tool = "poly"
+        elif not ctrl and k == "r":
+            ui.par.Tool = "rect"
 
     def MapPaste(self) -> bool:
         """Вставка скопированного (Ctrl+V): копии со сдвигом на шаг сетки (минимум 20 px холста); новые выбираются."""

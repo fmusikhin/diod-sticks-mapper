@@ -117,3 +117,17 @@ def test_renumber_copies():
     q = me.renumber(q, ids)
     assert [_fx(q, i).name for i in ids] == ["Стик 10", "Стик 11", "Стик 12"]   # в примере есть «Стик 9»
     assert me._base_name("Стик 5 (1) (3)") == ("Стик", 5)
+
+
+
+def test_tools_poly_rect_between():
+    p = _patch()
+    q, fid = me.new_fixture(p, "strip30", me.poly_shape([(0, 0), (100, 0), (100, 50)]), "out2")
+    assert _fx(q, fid).shape.kind == "polyline" and _fx(q, fid).address.output_id == "out2"
+    r = me.rect_shape((10, 10), (40, 30))
+    assert r.center == (25.0, 20.0) and r.size == (30.0, 20.0)
+    assert me.rect_shape((0, 0), (40, -10), square=True).size == (40.0, 40.0)
+    q, ids = me.between(p, "fx1", "fx2", 3)                       # fx1 x=120, fx2 x=200
+    xs = [_fx(q, i).shape.p1[0] for i in ids]
+    assert xs == [140.0, 160.0, 180.0] and all(_fx(q, i).type_id == "stick" for i in ids)
+    assert len(me.poly_rows([(0, 0), (10, 0)], (10, 10), 1.0)) == 2 + 2
