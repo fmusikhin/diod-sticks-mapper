@@ -40,6 +40,7 @@ class DsmPatchViewExt:
         self._grab = None                      # (Hit, fixture_id, "map"|"zoom") — перетаскивание сегмента
         self._drop = None                      # (выход, юниверс, канал) под курсором при перетаскивании
         self.place_id: str | None = None       # фикстура из списка «не размещены», ждущая клика по карте (3.6)
+        self._ed: dict | None = None           # жест редактора маппинга: перетаскивание или рисование линии
         eng = ownerComp.ext.DsmEngineExt
         eng.AddListener(self.OnPatchLoaded)
         eng.AddInfoProvider(self._info_rows)
@@ -497,6 +498,8 @@ class DsmPatchViewExt:
             name = par.name
             if name == "Dmxwindow":
                 self.Open() if par.eval() else self.Close()
+            elif name == "Mapwindow":
+                self.MapOpen() if par.eval() else self.MapClose()
             elif name == "Dmxoutput":
                 self.SelectOutput(par.eval().strip() or None)
             elif name == "Dmxundo" and par.isPulse:
@@ -550,7 +553,8 @@ class DsmPatchViewExt:
             hint = "; Undo вернёт прежний файл" if keep_undo else ""
             return self._fail(f"правка записана, но патч не загрузился: {eng.message}{hint}", notify=False)
         skip = set(skip or ()) | ({subject} if subject else set())
-        moved = [f for f in self.logic.shifted(before, eng.patch) if f not in skip]   # кроме самих правленных фикстур
+        both = {f.id for f in before.fixtures} & {f.id for f in eng.patch.fixtures}   # новые и удалённые — не «сдвиг»
+        moved = [f for f in self.logic.shifted(before, eng.patch) if f not in skip and f in both]   # кроме самих правленных фикстур
         self.message = f"{label}" + (f"; сдвинулось {len(moved)}: {' '.join(moved[:8])}" if moved else "")
         self._write("pv_status", self._status_rows(eng, *self._counts))   # таблицы уже перестроены слушателем загрузки
         eng.WriteInfo()
@@ -616,6 +620,7 @@ class DsmPatchViewExt:
                 self._write(name, [header])
             self._write("pv_status", self._status_rows(eng, 0, 0))
             self._write_render()
+            self._write_overlay()
             self.last_rebuild_ms = (time.perf_counter() - t0) * 1000.0
             eng.WriteInfo()
             return
@@ -642,6 +647,7 @@ class DsmPatchViewExt:
         self._counts = (errors, len(issues) - errors)
         self._write("pv_status", self._status_rows(eng, errors, len(issues) - errors))
         self._write_render()
+        self._write_overlay()
         self.last_rebuild_ms = (time.perf_counter() - t0) * 1000.0
         eng.WriteInfo()
 
@@ -662,6 +668,160 @@ class DsmPatchViewExt:
 
     def _ui(self):
         return self.ownerComp.op("ui_dmx")
+
+    # ------------------------------------------------------------------ редактор маппинга (холст ui_map)
+    def _mui(self):
+        return self.ownerComp.op("ui_map")
+
+    def _me(self):
+        return self.ownerComp.op("mapedit_mod").module
+
+    def _canvas_scale(self) -> tuple[float, float, float]:
+        """(ширина, высота холста патча, пикселей холста на пиксель экрана области холста)."""
+        c = self._engine().patch.canvas
+        aw = float(self._mui().par.w) - float(self._mui().par.Sidew)
+        return float(c.width), float(c.height), c.width / max(aw, 1.0)
+
+    def OnCanvas(self, event: str, u: float, v: float, shift: bool = False, ctrl: bool = False) -> None:
+        """Мышь на холсте: инструмент «выбор» — выбор (Ctrl — добавить/убрать), перетаскивание тела выбранных или конца
+        линии (Shift — без привязки к сетке); инструмент «линия» — новая фикстура выбранного профиля от нажатия до отпускания."""
+        eng, ui = self._engine(), self._mui()
+        if eng.patch is None or eng.status != "ok" or ui is None:
+            return
+        me = self._me()
+        cw, ch, scale = self._canvas_scale()
+        x, y = u * cw, v * ch
+        step = 0.0 if shift else float(ui.par.Snap)
+        if event == "down":
+            self._ed = None
+            if ui.par.Tool.eval() == "line":
+                p0 = (me.snap(x, step), me.snap(y, step))
+                self._ed = {"mode": "draw", "p1": p0, "p2": p0}
+            else:
+                fid, handle = me.hit(eng.patch, x, y, 6.0 * scale, self.selection)
+                if fid is None:
+                    if not ctrl:
+                        self._set_selection([], notify=True)
+                elif ctrl:
+                    sel = [i for i in self.selection if i != fid] if fid in self.selection else [*self.selection, fid]
+                    self._set_selection(sel, notify=True)
+                else:
+                    if fid not in self.selection:
+                        self._set_selection([fid], notify=True)
+                    ids = list(self.selection) if handle == "body" else [fid]
+                    self._ed = {"mode": "drag", "ids": ids, "handle": handle, "x0": x, "y0": y, "dx": 0.0, "dy": 0.0}
+            self._write_overlay()
+            return
+        if self._ed is None:
+            return
+        if event == "move":
+            if self._ed["mode"] == "draw":
+                self._ed["p2"] = (me.snap(x, step), me.snap(y, step))
+            else:
+                self._ed["dx"], self._ed["dy"], self._ed["step"] = x - self._ed["x0"], y - self._ed["y0"], step
+            self._write_overlay()
+            return
+        if event == "up":
+            ed, self._ed = self._ed, None
+            if ed["mode"] == "draw":
+                p1, p2 = ed["p1"], ed["p2"]
+                if (p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2 < (8 * scale) ** 2:
+                    self._write_overlay()
+                    return
+                type_id, out = ui.par.Addtype.eval(), self.CurrentOutput()
+                new_id = eng.api.next_ids(eng.patch, "fixture")[0]
+                if self._edit(lambda p: me.new_line(p, type_id, p1, p2, out)[0], f"новая {new_id} ({type_id})"):
+                    self._set_selection([new_id], notify=True)
+            elif abs(ed["dx"]) + abs(ed["dy"]) > 0.5 * scale:
+                ids, handle, dx, dy, st = ed["ids"], ed["handle"], ed["dx"], ed["dy"], ed.get("step", 0.0)
+                self._edit(lambda p: me.apply_drag(p, ids, handle, dx, dy, st),
+                           f"{' '.join(ids[:4])}: {'конец ' + handle if handle != 'body' else 'сдвиг'} {dx:+.0f} {dy:+.0f}",
+                           subject=ids[0] if len(ids) == 1 else None)
+            self._write_overlay()
+
+    def _write_overlay(self) -> None:
+        ui, eng = self._mui(), self._engine()
+        if ui is None:
+            return
+        if eng.patch is None:
+            self._write("me_overlay", [self._me().OVERLAY_COLUMNS])
+            return
+        me = self._me()
+        _cw, _ch, scale = self._canvas_scale()
+        drag = draw = None
+        if self._ed and self._ed["mode"] == "drag":
+            drag = (self._ed["ids"], self._ed["handle"], self._ed["dx"], self._ed["dy"], self._ed.get("step", 0.0))
+        elif self._ed and self._ed["mode"] == "draw":
+            draw = (self._ed["p1"], self._ed["p2"])
+        self._write("me_overlay", me.overlay_rows(eng.patch, self.selection, scale, drag, draw))
+
+    def MapDuplicate(self, dx: float, dy: float, count: int = 1) -> bool:
+        """Массив: копии выбранных со сдвигом (dx, dy) × count; новые выбираются."""
+        eng = self._engine()
+        if not self._can_edit("Дублировать"):
+            return False
+        ids = list(self.selection)
+        if not ids:
+            return self._fail("Дублировать: ничего не выбрано", notify=False)
+        count = max(1, int(count))
+        new = eng.api.next_ids(eng.patch, "fixture", len(ids) * count)
+        api = eng.api
+        ok = self._edit(lambda p: api.duplicate_fixtures(p, ids, float(dx), float(dy), count)[0],
+                        f"копии: {len(new)} шт. шаг {dx:+g} {dy:+g}", skip=set(new))
+        if ok:
+            self._set_selection(new, notify=True)
+        return ok
+
+    def MapDelete(self) -> bool:
+        eng = self._engine()
+        if not self._can_edit("Удалить"):
+            return False
+        ids = list(self.selection)
+        if not ids:
+            return self._fail("Удалить: ничего не выбрано", notify=False)
+        api = eng.api
+
+        def edit(p):
+            for fid in ids:
+                p = api.remove_fixture(p, fid)
+            return p
+        self.selection = ()
+        return self._edit(edit, f"удалено: {' '.join(ids[:8])}")
+
+    def MapReverse(self) -> bool:
+        if not self._can_edit("Развернуть"):
+            return False
+        ids = list(self.selection)
+        if not ids:
+            return self._fail("Развернуть: ничего не выбрано", notify=False)
+        me = self._me()
+        return self._edit(lambda p: me.reverse(p, ids), f"развёрнуто: {' '.join(ids[:8])}")
+
+    def MapOpen(self) -> None:
+        ui = self._mui()
+        if ui is None:
+            return
+        self._sync_types()
+        self._write_overlay()
+        ui.op("win").par.winopen.pulse()
+
+    def MapClose(self) -> None:
+        ui = self._mui()
+        if ui is not None:
+            ui.op("win").par.winclose.pulse()
+
+    def _sync_types(self) -> None:
+        """Меню профилей для инструмента «линия» — из патча."""
+        ui, patch = self._mui(), self._engine().patch
+        if ui is None or patch is None:
+            return
+        types = [t for t in patch.fixture_types]
+        par = ui.par.Addtype
+        cur = par.eval()
+        par.menuNames = [t.id for t in types] or [""]
+        par.menuLabels = [t.name for t in types] or ["—"]
+        if cur not in par.menuNames:
+            par.val = par.menuNames[0]
 
     def _map_size(self) -> tuple[float, float]:
         """Размер области карты в пикселях — из пар панели (не из геометрии панели: см. мануал, panel layout freeze)."""
