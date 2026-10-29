@@ -195,3 +195,21 @@ def test_output_view_roundtrip_keeps_input_shape():
 def LineShapeT(a, b):
     from dsm_core.model import LineShape
     return LineShape(p1=a, p2=b)
+
+
+
+def test_library_profile_new_update_and_shapes():
+    p = _patch()
+    q, tid = me.new_profile(p, 144, 1)
+    ft = next(t for t in q.fixture_types if t.id == tid)
+    assert ft.kind.value == "strip" and ft.cells == 144 and me.profile_dims(ft) == (144, 1)
+    q, fid = me.new_fixture(q, tid, me.default_shape(q, tid, (640, 360)), "out1")
+    assert _fx(q, fid).shape.kind == "line"
+    q = me.update_profile(q, tid, 144, 3, "bl_cols_snake", "GRB")                 # стала 3 ряда — палка → прямоугольник
+    ft = next(t for t in q.fixture_types if t.id == tid)
+    assert ft.kind.value == "matrix" and ft.cells == 432 and ft.layout.value == "bl_cols_snake" and ft.color_order == "GRB"
+    assert _fx(q, fid).shape.kind == "rect" and abs(_fx(q, fid).shape.size[1] - 30) < 1e-6
+    q = me.update_profile(q, tid, 100, 1, "tl_rows", "RGB")
+    ft = next(t for t in q.fixture_types if t.id == tid)
+    assert ft.kind.value == "strip" and ft.cells == 100 and me.profile_summary(ft) == "100×1"
+    assert me.default_shape(q, tid, (0, 0)).p1 == (-500.0, 0)

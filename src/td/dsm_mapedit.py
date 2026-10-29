@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
-from dsm_core.api import add_fixture, add_fixture_type, assign_to_output, next_ids, update_fixture
+from dsm_core.api import add_fixture, add_fixture_type, assign_to_output, next_ids, update_fixture, update_fixture_type
 from dsm_core.model import (ArcShape, CurveShape, CustomShape, Direction, Fixture, FixtureKind, FixtureType, LineShape,
                             MatrixLayout, Patch, PolylineShape, RectShape)
 
@@ -630,3 +630,58 @@ def from_output_view(view: Patch, original: Patch) -> Patch:
         out_shape = None if (o.output_shape is None and f.shape == o.shape) else f.shape
         out.append(replace(f, shape=o.shape, output_shape=out_shape))
     return replace(view, fixtures=tuple(out))
+
+
+
+# ---------- библиотека фикстур (как Fixture Library в Resolume): ширина × высота, порядок пикселей, цвет ----------
+
+def profile_summary(ft) -> str:
+    return f"{ft.width}×{ft.height}" if ft.kind == FixtureKind.MATRIX else f"{ft.cells}×1"
+
+
+def profile_dims(ft) -> tuple[int, int]:
+    """Ширина × высота в пикселях: у матрицы — свои, у линейного профиля — ячеек × 1."""
+    return (ft.width, ft.height) if ft.kind == FixtureKind.MATRIX else (ft.cells, 1)
+
+
+def new_profile(patch: Patch, width: int = 16, height: int = 1, layout: str = "tl_rows", color_order: str = "RGB",
+                name: str | None = None) -> tuple[Patch, str]:
+    """Новый профиль библиотеки: высота 1 — линейный (палка/лента), больше — матрица."""
+    width, height = max(1, int(width)), max(1, int(height))
+    tid = next_ids(patch, "fixture_type")[0]
+    if height == 1:
+        ft = FixtureType(id=tid, name=name or f"Pixels {width}", kind=FixtureKind.STRIP, cells=width, color_order=color_order)
+    else:
+        ft = FixtureType(id=tid, name=name or f"Matrix {width}×{height}", kind=FixtureKind.MATRIX, cells=width * height,
+                         width=width, height=height, layout=MatrixLayout(layout), color_order=color_order)
+    return add_fixture_type(patch, ft), tid
+
+
+def update_profile(patch: Patch, tid: str, width: int, height: int, layout: str, color_order: str,
+                   name: str | None = None) -> Patch:
+    """Правка профиля библиотеки — меняются все фикстуры профиля (как в Resolume). Высота > 1 — матрица: палки этого
+    профиля становятся прямоугольниками вдоль себя; высота 1 — линейный профиль (матрица 1 ряд не нужна)."""
+    width, height = max(1, int(width)), max(1, int(height))
+    ft = next(t for t in patch.fixture_types if t.id == tid)
+    changes = dict(color_order=color_order, name=(name or ft.name))
+    if height > 1:
+        changes.update(kind=FixtureKind.MATRIX, cells=width * height, width=width, height=height, layout=MatrixLayout(layout))
+    else:
+        kind = ft.kind if ft.kind != FixtureKind.MATRIX else FixtureKind.STRIP
+        changes.update(kind=kind, cells=width, width=1, height=1)
+    p = update_fixture_type(patch, tid, **changes)
+    if height > 1:
+        for fx in [f for f in p.fixtures if f.type_id == tid and isinstance(f.shape, LineShape)]:
+            p = update_fixture(p, fx.id, shape=line_to_rect(fx.shape.p1, fx.shape.p2, width, height))
+    return p
+
+
+def default_shape(patch: Patch, tid: str, center, cell_px: float = 10.0):
+    """Фигура новой фикстуры профиля в центре вида («Add to canvas»): линия или прямоугольник в масштабе клетки."""
+    ft = next(t for t in patch.fixture_types if t.id == tid)
+    w, h = profile_dims(ft)
+    cx, cy = center
+    if h == 1:
+        L = w * cell_px / 2
+        return LineShape(p1=(cx - L, cy), p2=(cx + L, cy))
+    return RectShape(center=(cx, cy), size=(w * cell_px, h * cell_px), rotation_deg=0.0)

@@ -403,12 +403,16 @@ class DsmPatchViewExt:
             self._drop_undo()                  # чужая загрузка или внешняя правка файла — история недействительна
         self._grab, self._drop, self.place_id = None, None, None     # раскладка сменилась — жест и размещение сброшены
         self._ed = None
+        ids = {f.id for f in patch.fixtures}
+        if any(i not in ids for i in self.selection):                 # другой патч — выбор только из существующих
+            self.selection = tuple(i for i in self.selection if i in ids)
         self._write("pv_preview", [self.logic.RECT_COLUMNS])
         if self.output_id is not None and not any(o.id == self.output_id for o in patch.outputs):
             self.output_id = None
             self.zoom_row = None
             self._sync_pars(Dmxoutput="")
         self._rebuild()
+        self._fill_insp()
 
     def OnMap(self, event: str, u: float, v: float, shift: bool = False) -> None:
         """Область карты (3.3, 3.4): hover — подсказка; down — выбор сегмента (захват) или строки (крупный юниверс),
@@ -793,7 +797,7 @@ class DsmPatchViewExt:
         c = self._engine().patch.canvas
         ui = self._mui()
         aw = float(ui.par.w) - float(ui.par.Sidew) - float(ui.par.Listw)
-        return aw, aw * c.height / max(c.width, 1)
+        return aw, float(ui.par.h) - float(ui.par.Headerh)          # холст на всю высоту под шапкой
 
     def _canvas_scale(self) -> tuple[float, float, float]:
         """(ширина, высота холста патча, пикселей холста на пиксель экрана при текущем виде)."""
@@ -969,14 +973,12 @@ class DsmPatchViewExt:
                 if abs(p2[0] - p1[0]) >= 8 * scale and (abs(p2[1] - p1[1]) >= 8 * scale or ed.get("square")):
                     shape = me.rect_shape(p1, p2, ed.get("square", False))
                     if not me.is_matrix(self._P(), ui.par.Addtype.eval()):
-                        # прямоугольник с линейным профилем лёг бы одной линией по оси — сразу матрица W×H из панели
-                        if not self.MapNewMatrixType():
-                            self._write_overlay()
-                            return
-                        note = f" — профиль {ui.par.Addtype.eval()} {int(ui.par.Mtxw)}×{int(ui.par.Mtxh)} создан из панели"
-                    else:
-                        note = ""
-                    self._create(shape, "прямоугольник" + note)
+                        # профиль в один ряд — палка по длинной стороне прямоугольника
+                        from dsm_core.model import LineShape
+                        (cx, cy), (w, h) = shape.center, shape.size
+                        shape = (LineShape(p1=(cx - w / 2, cy), p2=(cx + w / 2, cy)) if w >= h
+                                 else LineShape(p1=(cx, cy - h / 2), p2=(cx, cy + h / 2)))
+                    self._create(shape, "прямоугольник")
             elif m == "draw":
                 p1, p2 = ed["p1"], ed["p2"]
                 if (p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2 >= (8 * scale) ** 2:
@@ -1456,6 +1458,79 @@ class DsmPatchViewExt:
             ui.par.Addtype = tid
         return ok
 
+    LIB_PARS = ("Libname", "Libw", "Libh", "Libdist", "Liborder")
+
+    def _fill_lib(self) -> None:
+        """Блок Fixture library — по выбранному профилю (Addtype)."""
+        ui, patch = self._mui(), self._engine().patch
+        if ui is None or patch is None or ui.par["Libw"] is None:
+            return
+        ft = next((t for t in patch.fixture_types if t.id == ui.par.Addtype.eval()), None)
+        if ft is None:
+            return
+        me = self._me()
+        w, h = me.profile_dims(ft)
+        was, self._in_lib = getattr(self, "_in_lib", False), True
+        try:
+            ui.par.Libname = ft.name
+            ui.par.Libw, ui.par.Libh = w, h
+            ui.par.Libdist = ft.layout.value
+            ui.par.Liborder = ft.color_order
+            self._lib_filled = {n: ui.par[n].eval() for n in self.LIB_PARS}
+        finally:
+            self._in_lib = was
+
+    def MapLibrary(self, par) -> None:
+        """Правка профиля из библиотеки — сразу для всех фикстур профиля (как в Resolume); эхо заполнения игнорируется."""
+        if getattr(self, "_in_lib", False):
+            return
+        ui, eng = self._mui(), self._engine()
+        if ui is None or eng.patch is None:
+            return
+        if par.name == "Addtype":
+            self._fill_lib()
+            return
+        if par.name == "Newprofile":
+            self.MapLibNew()
+            return
+        if par.name == "Addfixture":
+            self.MapLibAdd()
+            return
+        filled = getattr(self, "_lib_filled", {})
+        if par.name in filled and par.eval() == filled[par.name]:
+            return
+        tid = ui.par.Addtype.eval()
+        if not any(t.id == tid for t in eng.patch.fixture_types) or not self._can_edit("Профиль"):
+            return
+        me = self._me()
+        w, h, lay, order, name = int(ui.par.Libw), int(ui.par.Libh), ui.par.Libdist.eval(), ui.par.Liborder.eval(), ui.par.Libname.eval()
+        if self._edit(lambda p: me.update_profile(p, tid, w, h, lay, order, name), f"профиль {tid}: {w}×{h} {lay} {order}"):
+            self._sync_types()
+            self._fill_lib()
+
+    def MapLibNew(self) -> bool:
+        """Новый профиль библиотеки (16×1) — сразу выбран, дальше правится полями."""
+        eng, ui, me = self._engine(), self._mui(), self._me()
+        if ui is None or not self._can_edit("Профиль"):
+            return False
+        tid = eng.api.next_ids(eng.patch, "fixture_type")[0]
+        ok = self._edit(lambda p: me.new_profile(p, 16, 1)[0], f"профиль {tid}: новый 16×1")
+        if ok:
+            self._sync_types()
+            ui.par.Addtype = tid
+            self._fill_lib()
+        return ok
+
+    def MapLibAdd(self) -> bool:
+        """Add to canvas: фикстура выбранного профиля в центре вида (как добавление из библиотеки в Resolume)."""
+        ui = self._mui()
+        if ui is None or self._P() is None:
+            return False
+        vx, vy, vw = self._get_view()
+        aw, ah = self._area()
+        center = (vx + vw / 2, vy + vw * ah / aw / 2)
+        return self._create(self._me().default_shape(self._P(), ui.par.Addtype.eval(), center), "из библиотеки")
+
     def MapPaste(self) -> bool:
         """Вставка скопированного (Ctrl+V): копии со сдвигом на шаг сетки (минимум 20 px холста); новые выбираются."""
         ids = [i for i in getattr(self, "_clip", []) if any(f.id == i for f in self._engine().patch.fixtures)]
@@ -1525,9 +1600,10 @@ class DsmPatchViewExt:
         par = ui.par.Addtype
         cur = par.eval()
         par.menuNames = [t.id for t in types] or ["none"]
-        par.menuLabels = [f"{t.id} — {t.name} ({self._type_short(t)})" for t in types] or ["—"]
+        par.menuLabels = [f"{t.name}  ·  {self._type_short(t)}" for t in types] or ["—"]
         if cur not in par.menuNames:
             par.val = par.menuNames[0]
+        self._fill_lib()
 
     def _map_size(self) -> tuple[float, float]:
         """Размер области карты в пикселях — из пар панели (не из геометрии панели: см. мануал, panel layout freeze)."""
