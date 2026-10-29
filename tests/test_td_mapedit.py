@@ -224,3 +224,21 @@ def test_input_edit_keeps_output_in_place():
     assert _fx(q, "fx2").output_shape is None                                # нетронутые — без output_shape
     q2 = me.pin_outputs(me.apply_shift(q, ["fx1"], 10, 0), q)
     assert _fx(q2, "fx1").output_shape == _fx(p, "fx1").shape                # уже закреплённый — не меняется
+
+
+
+def test_set_profile_converts_input_and_output():
+    p = _patch()
+    q, tid = me.new_matrix_type(p, 16, 2)
+    v = me.apply_shift(me.to_output_view(q), ["fx1"], 300, 0)
+    q = me.from_output_view(v, q)                               # выход разведён со входом
+    r = me.set_profile(q, "fx1", tid)
+    f = _fx(r, "fx1")
+    assert f.type_id == tid and f.shape.kind == "rect" and f.output_shape.kind == "rect"
+    assert abs(f.output_shape.center[0] - f.shape.center[0] - 300) < 1e-6
+
+
+def test_pin_outputs_keeps_output_on_input_edit():
+    p = _patch()
+    q = me.pin_outputs(me.apply_shift(p, ["fx1"], 100, 0), p)
+    assert _fx(q, "fx1").output_shape == _fx(p, "fx1").shape and _fx(q, "fx2").output_shape is None

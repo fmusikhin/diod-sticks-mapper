@@ -1116,7 +1116,8 @@ class DsmPatchViewExt:
             insp.par.Type.menuLabels = [t.name for t in patch.fixture_types] or ["—"]
             insp.par.Output.menuNames = ["none"] + [o.id for o in patch.outputs]   # пустое имя пункта TD не принимает
             insp.par.Output.menuLabels = ["— no output"] + [o.name for o in patch.outputs]
-            fx = next((f for f in patch.fixtures if self.selection and f.id == self.selection[0]), None)
+            view = self._P()                      # геометрия — текущего режима (на OUTPUT — output_shape)
+            fx = next((f for f in view.fixtures if self.selection and f.id == self.selection[0]), None)
             insp.par.Fixture = (fx.id + (f"  (+{len(self.selection) - 1})" if len(self.selection) > 1 else "")) if fx else ""
             if fx is None:
                 return
@@ -1127,7 +1128,7 @@ class DsmPatchViewExt:
             if hasattr(s, "p1"):
                 (x1, y1), (x2, y2) = s.p1, s.p2
             else:
-                bb = me.sel_bbox(patch, [fx.id])
+                bb = me.sel_bbox(view, [fx.id])
                 x1, y1, x2, y2 = bb
             insp.par.X1, insp.par.Y1, insp.par.X2, insp.par.Y2 = round(x1, 2), round(y1, 2), round(x2, 2), round(y2, 2)
             insp.par.Length = round(((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5, 2)
@@ -1189,11 +1190,8 @@ class DsmPatchViewExt:
         elif name == "Type":
             v = str(par.eval())
             if v and v != "none" and v != fx.type_id:
-                ft = next((x for x in self._P().fixture_types if x.id == v), None)
-                changes = {"type_id": v}
-                if ft is not None and me.is_matrix(self._P(), v) and hasattr(fx.shape, "p1"):
-                    changes["shape"] = me.line_to_rect(fx.shape.p1, fx.shape.p2, ft.width, ft.height)  # линия → матрица
-                self._medit(lambda p: api.update_fixture(p, fid, **changes), f"{fid}: профиль {v}", subject=fid)
+                # вход и выход меняются вместе (линия → матрица у обеих фигур), мимо pin_outputs/вида OUTPUT
+                self._edit(lambda p: me.set_profile(p, fid, v), f"{fid}: профиль {v}", subject=fid)
         elif name == "Reverse":
             want = "reverse" if par.eval() else "forward"
             if fx.direction.value != want:

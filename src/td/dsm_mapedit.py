@@ -699,3 +699,17 @@ def pin_outputs(new: Patch, old: Patch) -> Patch:
             f = replace(f, output_shape=o.shape)
         fx.append(f)
     return replace(new, fixtures=tuple(fx))
+
+
+def set_profile(patch: Patch, fid: str, tid: str) -> Patch:
+    """Смена профиля фикстуры: на матричный — линии входа и выхода (output_shape) становятся прямоугольниками
+    вдоль себя, чтобы ячейки раскладывались одинаково на обеих сторонах."""
+    ft = next(t for t in patch.fixture_types if t.id == tid)
+    fx = next(f for f in patch.fixtures if f.id == fid)
+    changes = {"type_id": tid}
+    if ft.kind == FixtureKind.MATRIX:
+        for key in ("shape", "output_shape"):
+            s = getattr(fx, key)
+            if isinstance(s, LineShape):
+                changes[key] = line_to_rect(s.p1, s.p2, ft.width, ft.height)
+    return update_fixture(patch, fid, **changes)

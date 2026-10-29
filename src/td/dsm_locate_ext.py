@@ -71,6 +71,8 @@ class DsmLocateExt:
     def _step(self, delta: int) -> bool:
         eng, s = self._engine(), self.state
         if eng.patch is None:
+            if s.walk:
+                self.Walk(False)
             return self._fail("обход: патч не загружен")
         p = self.ownerComp.par
         unchecked = bool(p.Walkunchecked.eval()) if p["Walkunchecked"] is not None else s.walk_unchecked
@@ -79,6 +81,8 @@ class DsmLocateExt:
         cur = s.target.fixtures[0] if s.target is not None and len(s.target.fixtures) == 1 else None
         k = self.logic.step(order, cur, delta, loop)
         if k is None:
+            if s.walk:                                          # обходить нечего — автошаг выключается
+                self.Walk(False)
             return self._fail("обход: нет выводимых фикстур" + (" без статуса" if unchecked else ""))
         if not loop and cur is not None and k == cur:          # край без круга — автошаг останавливается
             if s.walk:
@@ -201,16 +205,28 @@ class DsmLocateExt:
         eng.WriteInfo()
         return True
 
-    def FixReversed(self, fixture_id: str) -> bool:
-        """«Исправить перевёрнутую»: направление наоборот и статус сброшен — с пересборкой; цель и режим сохраняются."""
+    def FixReversed(self, fixture_id: str | list[str]) -> bool:
+        """«Исправить перевёрнутую»: направление наоборот и статус сброшен — одной записью и одной пересборкой;
+        цель и режим сохраняются. Список id — только со статусом reversed (8.2)."""
         eng = self._engine()
         if eng.patch is None:
             return self._fail("приёмка: патч не загружен")
         api = eng.api
-        if not eng.SavePatch(lambda p: api.fix_reversed(p, fixture_id), True):
+        if isinstance(fixture_id, str):
+            ids = [fixture_id]
+        else:
+            ids = [f.id for f in eng.patch.fixtures if f.id in set(fixture_id) and f.acceptance.value == "reversed"]
+            if not ids:
+                return self._fail("исправить: в цели нет фикстур со статусом reversed")
+
+        def edit(p):
+            for fid in ids:
+                p = api.fix_reversed(p, fid)
+            return p
+        if not eng.SavePatch(edit, True):
             return self._fail(f"исправить: не записано: {eng.message}")
         self._write_sheet()
-        self._set(message=f"{fixture_id}: направление исправлено")
+        self._set(message=f"{', '.join(ids)}: направление исправлено")
         eng.WriteInfo()
         return True
 
@@ -321,11 +337,11 @@ class DsmLocateExt:
                 ids = self._target_ids()
                 if not ids:
                     self._fail("приёмка: сначала Locate фикстуры")
-                for fid in ids:
-                    if name == "Acceptset":
+                elif name == "Acceptset":
+                    for fid in ids:
                         self.SetAcceptance(fid, self.ownerComp.par.Accept.eval())
-                    else:
-                        self.FixReversed(fid)
+                else:
+                    self.FixReversed(ids)
             elif name == "Exportsheet":
                 self.ExportSheet()
         except Exception:  # команда пары — в textport и info, компонент работает дальше
