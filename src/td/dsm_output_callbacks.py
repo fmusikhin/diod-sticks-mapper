@@ -36,6 +36,7 @@ def onReplicate(comp, allOps, newOps, template, master):
 	for r in allOps:
 		configure(comp, r)
 	parent.dsm.ApplyActive()      # политика active — только в расширении
+	parent.dsm.ext.DsmLocateExt.ReapplyRaw()      # сырой адрес Locate, если включён, — снова на свою группу
 	return
 
 

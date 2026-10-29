@@ -85,6 +85,7 @@ def validate(patch: Patch) -> list[Issue]:
     occ = Occupancy()
     used: dict[str, set[int]] = {o.id: set() for o in patch.outputs}
     port_cells: dict[tuple[str, str], int] = {}
+    fx_load: dict[str, tuple[int, set[int]]] = {}        # фикстура порта → (ячеек, юниверсы) — кто не влез в лимит
     port_unis: dict[tuple[str, str], set[int]] = {}
     for fx in patch.fixtures:
         ft = types.get(fx.type_id)
@@ -138,6 +139,7 @@ def validate(patch: Patch) -> list[Issue]:
             key = (out.id, a.port_id)
             port_cells[key] = port_cells.get(key, 0) + cell_count(ft, fx)
             port_unis.setdefault(key, set()).update(s.universe for s in segs)
+            fx_load[fx.id] = (cell_count(ft, fx), {s.universe for s in segs})
 
     # --- пересечения каналов ---
     names = {f.id: f.name for f in patch.fixtures}
@@ -148,18 +150,28 @@ def validate(patch: Patch) -> list[Issue]:
                             f"{names.get(a_id, a_id)!r} и {names.get(b_id, b_id)!r}",
                             (a_id, b_id), out_id, None, u, (lo, hi)))
 
-    # --- лимиты портов ---
+    # --- лимиты портов: в ошибке — только фикстуры, не влезшие в лимит по порядку цепочки (первые выводятся) ---
     for out in patch.outputs:
         for p in out.ports:
             key = (out.id, p.id)
             n = port_cells.get(key, 0)
             if p.max_cells is not None and n > p.max_cells:
+                over, acc = [], 0
+                for fid in p.fixture_ids:
+                    acc += fx_load.get(fid, (0, set()))[0]
+                    if acc > p.max_cells:
+                        over.append(fid)
                 issues.append(Issue(E, IssueCode.PORT_LIMIT, f"порт {p.number} выхода {out.name!r}: {n} ячеек при лимите {p.max_cells}",
-                                    tuple(p.fixture_ids), out.id, p.id))
+                                    tuple(over), out.id, p.id))
             un = len(port_unis.get(key, ()))
             if p.max_universes is not None and un > p.max_universes:
+                over, unis = [], set()
+                for fid in p.fixture_ids:
+                    unis |= fx_load.get(fid, (0, set()))[1]
+                    if len(unis) > p.max_universes:
+                        over.append(fid)
                 issues.append(Issue(E, IssueCode.PORT_LIMIT, f"порт {p.number} выхода {out.name!r}: {un} юниверсов при лимите {p.max_universes}",
-                                    tuple(p.fixture_ids), out.id, p.id))
+                                    tuple(over), out.id, p.id))
 
     # --- дубли юниверсов на одной цели ---
     seen: dict[tuple, str] = {}

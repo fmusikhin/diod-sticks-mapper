@@ -47,8 +47,8 @@
 | `White` | Float | 1 | |
 | `Ingamma` | Float | 1 | гамма входа |
 
-Страница `Locate` (спека `locate-test`, в `main` — каркас 1.1–3.3: команды дают сообщение «не реализовано», шейдер в обходе,
-сырой адрес выключен; вывод совпадает с 0.1 байт в байт):
+Страница `Locate` (спека `locate-test`): цель и режимы, обход (Next/Prev/Walk), тест-паттерны, сырой адрес, приёмка.
+Цель и сырой адрес переживают перезагрузку патча; в окне маппинга — вкладка Locate:
 
 | Пара | Тип | По умолчанию | Смысл |
 |---|---|---|---|
@@ -78,6 +78,10 @@
 | `Rawvalue` | Int 0–255 | 255 | значение |
 | `Rawactive` | Toggle | выкл. | сырой адрес вкл. |
 | `Testwindow` | Toggle | выкл. | окно панели TEST (панели пока нет) |
+| `Accept` | Menu | `ok` | статус приёмки для «Mark target»: `ok` / `reversed` / `dead` / `misplaced` / `wrong_address` / `none` |
+| `Acceptset` | Pulse | | записать статус `Accept` фикстурам цели (в файл патча) |
+| `Fixreversed` | Pulse | | развернуть фикстуры цели, статус сброшен |
+| `Exportsheet` | Pulse | | лист приёмки `<патч>_acceptance.csv` рядом с патчем |
 
 Страница `Dmx` (спека `patch-view`, в работе — команды пока дают сообщение «не реализовано»):
 
@@ -88,6 +92,7 @@
 | `Dmxsnap` | Toggle | вкл. | привязка к ячейке при перетаскивании (Shift — любой канал) |
 | `Dmxundo` | Pulse | | отменить последнюю правку |
 | `Dmxexport` | Pulse | | экспорт листа адресов CSV рядом с патчем |
+| `Mapwindow` | Toggle | off | окно редактора маппинга (холст: выбор, перетаскивание, новые линии, массив, разворот, удаление) |
 
 Страница `Info` (все `readOnly`):
 
@@ -147,7 +152,7 @@ DAT из пары `Callbacks` (шаблон — `src/td/dsm_callbacks_default.py
 | Подконтейнер | Что внутри |
 |---|---|
 | `input` | `in1` → `crop` → `resize` → `levels` → `in_prepared` (пары `Input`) |
-| `tables` | DAT от расширения: `geo_cells`, `geo_prims`, `geo_raw`, `raw_prims`, `fx_arrows`, `arrow_pts`, `arrow_prims`, `profiles`, `delay_groups`, `out_groups`, `fixture_sets`, `raw_sets`, `map_sets`, `routing_<grp>`, `info`; Locate: `locate_fx`, `locate_raw_pts`, `locate_raw_prims`; DMX (patch-view): `pv_rects`, `pv_preview`, `pv_zoom`, `pv_labels`, `pv_rows`, `pv_issues`, `pv_unassigned`, `pv_outputs`, `pv_ports`, `pv_sheet`, `pv_status`, `pv_hover`, рендер панели `rn_map_fill`, `rn_map_line`, `rn_map_prev`, `rn_map_labels`, `rn_zoom_fill`, `rn_zoom_line`, `rn_zoom_grid` |
+| `tables` | DAT от расширения: `geo_cells`, `geo_prims`, `geo_raw`, `raw_prims`, `fx_arrows`, `arrow_pts`, `arrow_prims`, `profiles`, `delay_groups`, `out_groups`, `fixture_sets`, `raw_sets`, `map_sets`, `routing_<grp>`, `info`; Locate: `locate_fx`, `locate_raw_pts`, `locate_raw_prims`; DMX (patch-view): `pv_rects`, `pv_preview`, `pv_zoom`, `pv_labels`, `pv_rows`, `pv_issues`, `pv_unassigned`, `pv_outputs`, `pv_ports`, `pv_sheet`, `pv_status`, `pv_hover`, рендер панели `rn_map_fill`, `rn_map_line`, `rn_map_prev`, `rn_map_labels`, `rn_zoom_fill`, `rn_zoom_line`, `rn_zoom_grid`; редактор маппинга: `me_overlay`, `me_list`, `me_labels`, `me_cells_out` |
 | `engine` | `pts_cells` (`dattoPOP` из `geo_cells` + `geo_prims`) → `px_process` (`glslPOP`, выборка и обработка; ошибки компиляции — `px_process_info`) → `px_out` → `out1`; `pts_raw` → `raw_out` → `out2` (служебные каналы) |
 | `hook` | `in1` → `locate` (`glslPOP` Locate, в обходе, пока Locate выключен; свои `locate_info`, `locate_compute`) → `out1` — точка
   подключения `locate-test` и `palette-generators` (контракт ниже); `locate_fx_chop`, `locate_addr_chop` — `dattoCHOP` из `tables/locate_fx` |
@@ -159,6 +164,8 @@ DAT из пары `Callbacks` (шаблон — `src/td/dsm_callbacks_default.py
 | `diag` | `counters` (1 Гц → `UpdateCounters`), превью `preview_render`/`preview` (`geo_pts` с `mat_pts`, `geo_arrows` с `mat_arrows`, `cam`, `bg`), `pixels_top`, `pixels_chop` → `pixels_named`, карты `rep_maps` → `map_<set>` → `dmxmap_all` |
 | `watch` | `watch_folder` (`folderDAT` на папку патча) + `watch_exec` → `CheckFile` при `Autoreload` |
 | `ui_dmx` | панель DMX 1280×720 (`containerCOMP`, `parentshortcut = dmx`, `display = False`, окно `win` по паре `Dmxwindow`): `header_bar` (счётчики, статус, кнопки), `body_lr` — слева карта (рендер инстансов из таблиц rn_map_*, подписи Geo Text, мышь → `OnMap`, подсказка) и крупный юниверс (rn_zoom_*, мышь → `OnZoom`), справа вкладки по паре `Sidetab` (листеры проблем, выходов, «без адреса» на таблицах pv_*, редактор фикстуры); редакторы `fixture_edit`, `output_edit` и их исполнители `fixture_edit_exec`, `output_edit_exec`. Пары `Style`/`Geom` на корне панели; при закрытом окне рендеры не кукаются |
+| `ui_main` | общее окно 1280×720, вкладки по 1280×690 (`parentshortcut = mainui`, окно `win` без рамки): `mode_bar` — вкладки INPUT / OUTPUT / DMX и Close; панели `ui_map` (INPUT и OUTPUT) и `ui_dmx` (DMX) подключены панельными детьми, показ по паре Mode; пары `Mapwindow` / `Dmxwindow` открывают это окно на своей вкладке. INPUT — фигуры выборки поверх контента; OUTPUT — физическое расположение (поле патча output_shape; пока не сдвинута — как вход), фон — тёмный план, контуры цветом фикстуры, живой свет — точки движка (engine/px_out) в выходных позициях (таблица me_cells_out в порядке geo_cells, glslPOP подменяет P, инстансинг квадратов; в кадре только GPU); выборка цвета берёт только INPUT |
+| `ui_map` | окно маппинга 1280×720 (`parentshortcut = mapui`, `display = False`, окно `win` по паре `Mapwindow`): `header_bar` (инструменты Выбор/Линия, массив, разворот, удаление, отмена), `body_lr` — холст (превью движка + оверлей выделения из таблицы me_overlay, мышь → `OnCanvas`) и панель справа (пары страницы `Tools` и редактор адреса фикстуры); `tools_exec` — пульсы инструментов; `keys` (Keyboard In, только при фокусе окна) — клавиши как в Resolume: Delete, стрелки, Ctrl+D/A/C/V/Z/Y, Ctrl+Shift+Z, Esc, V/L, F, 1; слева список фикстур (`body_lr`: листер на таблице me_list, двойной клик по имени — переименование), справа инспектор `insp` (имя, профиль, концы, длина, угол, направление, mute, адрес) с исполнителем `insp_exec`. Инструменты: Ломаная (P), Прямоугольник (R), Между; Fixture library на вкладке Draw (как в Resolume): профиль — Width × Height пикселей, Distribution (16 вариантов), Color; правка профиля сразу меняет все его фикстуры (высота > 1 — палки становятся матрицами), New profile, Add to canvas (исполнитель `lib_exec`); линия и прямоугольник рисуют выбранным профилем, у матриц на холсте — сетка клеток и первая ячейка зелёным; подписи «id · юниверс:канал» (пара Showlabels); Locate выбранных — кнопка/клавиша B или пара Locatesel (мигает на живом выводе через `DsmLocateExt.Locate`, на холсте — жёлтым). Логика холста — `mapedit_mod` (`src/td/dsm_mapedit.py`) |
 | `templates` | мастера репликаторов `fx_tpl`, `raw_tpl`, `delay_tpl`, `out_tpl`, `map_tpl`; `allowCooking = False` (иначе шаблон кукается и дублирует вывод) |
 
 Выходы корня: `sel_preview` → `out1`, `sel_pixels` → `out2`, `sel_pxchop` → `out3`, `sel_info` → `out4`, `sel_map` → `out5`.

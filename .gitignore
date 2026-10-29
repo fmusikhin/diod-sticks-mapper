@@ -36,4 +36,6 @@ desktop.ini
 
 # Отчёты и перехваты стенда pixel-engine
 td/stand/reports/
+td/stand/work/
 td/stand/smoke.toe
+examples/*_addresses.csv
