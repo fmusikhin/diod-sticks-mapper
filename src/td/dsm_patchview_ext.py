@@ -778,9 +778,9 @@ class DsmPatchViewExt:
 
     def _medit(self, edit, label: str, **kw) -> bool:
         """Правка холста: на OUTPUT — через вид и обратно (входная фигура не меняется, пишется output_shape)."""
-        if self._mode() != "output":
-            return self._edit(edit, label, **kw)
         me = self._me()
+        if self._mode() != "output":                    # INPUT: двигается только выборка, OUTPUT остаётся на месте
+            return self._edit(lambda p: me.pin_outputs(edit(p), p), label, **kw)
         return self._edit(lambda p: me.from_output_view(edit(me.to_output_view(p)), p), "OUTPUT: " + label, **kw)
 
     def MapMode(self, mode: str) -> None:

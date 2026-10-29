@@ -213,3 +213,14 @@ def test_library_profile_new_update_and_shapes():
     ft = next(t for t in q.fixture_types if t.id == tid)
     assert ft.kind.value == "strip" and ft.cells == 100 and me.profile_summary(ft) == "100×1"
     assert me.default_shape(q, tid, (0, 0)).p1 == (-500.0, 0)
+
+
+
+def test_input_edit_keeps_output_in_place():
+    p = _patch()
+    q = me.pin_outputs(me.apply_shift(p, ["fx1"], 30, 0), p)
+    assert _fx(q, "fx1").shape.p1 == (150.0, 100.0)                          # вход сдвинут
+    assert _fx(q, "fx1").output_shape == _fx(p, "fx1").shape                 # выход остался на месте
+    assert _fx(q, "fx2").output_shape is None                                # нетронутые — без output_shape
+    q2 = me.pin_outputs(me.apply_shift(q, ["fx1"], 10, 0), q)
+    assert _fx(q2, "fx1").output_shape == _fx(p, "fx1").shape                # уже закреплённый — не меняется

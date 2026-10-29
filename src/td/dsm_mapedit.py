@@ -685,3 +685,17 @@ def default_shape(patch: Patch, tid: str, center, cell_px: float = 10.0):
         L = w * cell_px / 2
         return LineShape(p1=(cx - L, cy), p2=(cx + L, cy))
     return RectShape(center=(cx, cy), size=(w * cell_px, h * cell_px), rotation_deg=0.0)
+
+
+
+def pin_outputs(new: Patch, old: Patch) -> Patch:
+    """Правка на INPUT не двигает OUTPUT: у фикстур, которые повторяли вход (output_shape нет) и чья входная фигура
+    изменилась, выход закрепляется на прежнем месте. Новые фикстуры — без output_shape (на выходе там же, где нарисованы)."""
+    before = {f.id: f for f in old.fixtures}
+    fx = []
+    for f in new.fixtures:
+        o = before.get(f.id)
+        if o is not None and o.output_shape is None and f.output_shape is None and f.shape != o.shape:
+            f = replace(f, output_shape=o.shape)
+        fx.append(f)
+    return replace(new, fixtures=tuple(fx))
