@@ -188,8 +188,8 @@ def overlay_rows(patch: Patch, selected, scale: float, drag=None, draw_new=None,
         pts, closed = outline(fx.shape)
         if fx.id in bad:
             rgb, alpha, k = (1.0, 0.2, 0.2), 0.95, 1.0
-        elif colors and fx.id in colors:                 # OUTPUT: нет контента под фикстурами — цвет фикстуры, толще
-            rgb, alpha, k = colors[fx.id], 0.95, 2.0
+        elif colors and fx.id in colors:                 # OUTPUT: цвет фикстуры тонко — под ним живой свет пикселей
+            rgb, alpha, k = colors[fx.id], 0.45, 0.5
         else:
             rgb, alpha, k = (0.7, 0.7, 0.75), 0.45, 0.6
         for a, b in zip(pts, pts[1:] + (pts[:1] if closed else [])):

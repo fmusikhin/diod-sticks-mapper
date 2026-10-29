@@ -666,6 +666,7 @@ class DsmPatchViewExt:
             self._write_render()
             self._write_overlay()
             self._write_list()
+            self._write_cells_out()
             self._sync_types()
             self.last_rebuild_ms = (time.perf_counter() - t0) * 1000.0
             eng.WriteInfo()
@@ -695,6 +696,7 @@ class DsmPatchViewExt:
         self._write_render()
         self._write_overlay()
         self._write_list()
+        self._write_cells_out()
         self._sync_types()
         self.last_rebuild_ms = (time.perf_counter() - t0) * 1000.0
         eng.WriteInfo()
@@ -1277,6 +1279,40 @@ class DsmPatchViewExt:
             pass
         finally:
             self._list_sync = False
+
+    def _write_cells_out(self) -> None:
+        """me_cells_out — позиции ячеек на OUTPUT (по output_shape) в порядке строк geo_cells движка: GPU-превью
+        живого света берёт цвет точки движка и ставит её сюда. Python — только при загрузке патча."""
+        if self._mui() is None:
+            return
+        eng = self._engine()
+        cells = self.ownerComp.op("tables/geo_cells")
+        rows = [["P(0)", "P(1)", "P(2)"]]
+        if eng.patch is not None and cells is not None and cells.numRows > 1:
+            geo, patch = eng.geometry, eng.patch
+            types = {t.id: t for t in patch.fixture_types}
+            out_pos: dict[int, list] = {}
+            for k, fx in enumerate(patch.fixtures):
+                if fx.output_shape is None or fx.type_id not in types:
+                    continue
+                try:
+                    from dataclasses import replace as _r
+                    fo = _r(fx, shape=fx.output_shape)
+                    ft = types[fx.type_id]
+                    order = geo.cell_order(ft, fo)
+                    by_grid = geo._positions_by_grid(patch.canvas, ft, fo, len(order))
+                    out_pos[k] = [by_grid[c.grid_index] for c in order]
+                except Exception:  # форма выхода не поддержана — точки остаются на входе
+                    continue
+            ci = {cells[0, c].val: c for c in range(cells.numCols)}
+            for r in range(1, cells.numRows):
+                fx_i, di = int(cells[r, ci["fx"]]), int(cells[r, ci["cell"]])
+                pos = out_pos.get(fx_i)
+                if pos is not None and di < len(pos):
+                    rows.append([f"{pos[di][0]:.3f}", f"{pos[di][1]:.3f}", "0"])
+                else:
+                    rows.append([cells[r, ci["P(0)"]].val, cells[r, ci["P(1)"]].val, "0"])
+        self._write("me_cells_out", rows)
 
     def _write_overlay(self) -> None:
         ui, eng = self._mui(), self._engine()
