@@ -56,8 +56,11 @@ class DsmPatchViewExt:
         if ui is None:
             self._fail("Open: нет панели ui_dmx", notify=False)
             return
-        self._cooking(True)
         self._sync_pars(Dmxwindow=True)
+        if self._main() is not None:
+            self.MainOpen("dmx")
+            return
+        self._cooking(True)
         self._rebuild()
         ui.op("win").par.winopen.pulse()
 
@@ -65,6 +68,9 @@ class DsmPatchViewExt:
         """Закрыть окно; при закрытом окне рендеры карты не кукаются (1.6)."""
         ui = self._ui()
         if ui is None:
+            return
+        if self._main() is not None:
+            self.MainClose()
             return
         ui.op("win").par.winclose.pulse()
         self._sync_pars(Dmxwindow=False)
@@ -707,12 +713,80 @@ class DsmPatchViewExt:
     def _ui(self):
         return self.ownerComp.op("ui_dmx")
 
+    # ------------------------------------------------------------------ общее окно: INPUT / OUTPUT / DMX
+    def _main(self):
+        return self.ownerComp.op("ui_main")
+
+    def MainOpen(self, mode: str | None = None) -> None:
+        """Открыть общее окно на вкладке ``mode`` (input / output / dmx; None — текущая)."""
+        main = self._main()
+        if main is None:
+            return
+        self.MainMode(mode or main.par.Mode.eval())
+        main.op("win").par.winopen.pulse()
+
+    def MainClose(self) -> None:
+        main = self._main()
+        if main is None:
+            return
+        if self._mui() is not None and bool(self._mui().par.Locating):
+            self.MapLocate(False)
+        main.op("win").par.winclose.pulse()
+        self._cooking(False)
+        self._sync_pars(Dmxwindow=False, Mapwindow=False)
+
+    def MainMode(self, mode: str) -> None:
+        """Вкладка общего окна: input / output — холст маппинга, dmx — карта юниверсов."""
+        main = self._main()
+        if main is None:
+            return
+        main.par.Mode = mode
+        self._cooking(mode == "dmx")
+        if mode == "dmx":
+            self._rebuild()
+        else:
+            self._sync_types()
+            self.MapMode(mode)
+
     # ------------------------------------------------------------------ редактор маппинга (холст ui_map)
     def _mui(self):
         return self.ownerComp.op("ui_map")
 
     def _me(self):
         return self.ownerComp.op("mapedit_mod").module
+
+    def _mode(self) -> str:
+        """Холст окна маппинга: input — выборка цвета поверх контента, output — физическое расположение."""
+        ui = self._mui()
+        return ui.par.Mode.eval() if ui is not None and ui.par["Mode"] is not None else "input"
+
+    def _P(self):
+        """Патч холста текущего режима: input — патч движка, output — вид с output_shape (кэш по патчу)."""
+        eng = self._engine()
+        if eng.patch is None or self._mode() != "output":
+            return eng.patch
+        key = id(eng.patch)
+        if getattr(self, "_pview", (None, None))[0] != key:
+            self._pview = (key, self._me().to_output_view(eng.patch))
+        return self._pview[1]
+
+    def _medit(self, edit, label: str, **kw) -> bool:
+        """Правка холста: на OUTPUT — через вид и обратно (входная фигура не меняется, пишется output_shape)."""
+        if self._mode() != "output":
+            return self._edit(edit, label, **kw)
+        me = self._me()
+        return self._edit(lambda p: me.from_output_view(edit(me.to_output_view(p)), p), "OUTPUT: " + label, **kw)
+
+    def MapMode(self, mode: str) -> None:
+        """Переключить холст INPUT / OUTPUT (вид, фон и правки)."""
+        ui = self._mui()
+        if ui is None:
+            return
+        ui.par.Mode = mode
+        self._ed, self._poly = None, None
+        self.view = None
+        self._write_overlay()
+        self._fill_insp()
 
     def _area(self) -> tuple[float, float]:
         """Размер области холста в пикселях экрана — из пар окна (геометрию панели не читаем)."""
@@ -769,7 +843,7 @@ class DsmPatchViewExt:
         к концам соседей и сетке (Shift — ось, Alt — без привязок); углы рамки — масштаб (Shift — пропорционально,
         Alt — от центра), верхняя ручка — поворот (Shift — шаг 15°). «Линия»: тянуть от начала до конца."""
         eng, ui = self._engine(), self._mui()
-        if eng.patch is None or eng.status != "ok" or ui is None:
+        if self._P() is None or eng.status != "ok" or ui is None:
             return
         me = self._me()
         aw, ah = self._area()
@@ -802,8 +876,8 @@ class DsmPatchViewExt:
                 self._ed = {"mode": "draw" if tool == "line" else "rect", "p1": p0, "p2": p0}
                 self._write_overlay()
                 return
-            bbox = me.sel_bbox(eng.patch, self.selection) if self.selection else None
-            fid0, h0 = me.hit(eng.patch, x, y, 6.0 * scale, self.selection)
+            bbox = me.sel_bbox(self._P(), self.selection) if self.selection else None
+            fid0, h0 = me.hit(self._P(), x, y, 6.0 * scale, self.selection)
             fh = None if h0 in ("p1", "p2") else (me.hit_frame(bbox, x, y, scale) if bbox is not None else None)  # концы линии важнее углов рамки
             if fh == "rot":
                 self._ed = {"mode": "rotate", "ids": list(self.selection), "bbox": bbox, "x0": x, "y0": y, "deg": 0.0}
@@ -812,7 +886,7 @@ class DsmPatchViewExt:
                 self._ed = {"mode": "scale", "ids": list(self.selection), "bbox": bbox, "handle": fh,
                             "pivot": (0.0, 0.0), "sx": 1.0, "sy": 1.0}
                 return
-            fid, handle = me.hit(eng.patch, x, y, 6.0 * scale, self.selection)
+            fid, handle = me.hit(self._P(), x, y, 6.0 * scale, self.selection)
             if fid is None:
                 if not (ctrl or shift):
                     self._set_selection([], notify=True)
@@ -847,7 +921,7 @@ class DsmPatchViewExt:
                 dx, dy = x - ed["x0"], y - ed["y0"]
                 ed["mark"] = None
                 if shift and ed["handle"] in ("p1", "p2"):             # конец линии: угол к другому концу кратен 15°
-                    fx = next(f for f in eng.patch.fixtures if f.id == ed["ids"][0])
+                    fx = next(f for f in self._P().fixtures if f.id == ed["ids"][0])
                     other = fx.shape.p2 if ed["handle"] == "p1" else fx.shape.p1
                     cur = getattr(fx.shape, ed["handle"])
                     q = me.snap_angle(other, (cur[0] + dx, cur[1] + dy), 15.0)
@@ -858,11 +932,11 @@ class DsmPatchViewExt:
                     dx, dy = (dx, 0.0) if abs(dx) >= abs(dy) else (0.0, dy)
                 if not alt:
                     if ed["handle"] in ("p1", "p2"):
-                        fx = next(f for f in eng.patch.fixtures if f.id == ed["ids"][0])
+                        fx = next(f for f in self._P().fixtures if f.id == ed["ids"][0])
                         moving = [getattr(fx.shape, ed["handle"])]
                     else:
-                        moving = [q for f in eng.patch.fixtures if f.id in set(ed["ids"]) for q in me.outline(f.shape)[0]]
-                    targets = me.endpoints(eng.patch, ed["ids"])
+                        moving = [q for f in self._P().fixtures if f.id in set(ed["ids"]) for q in me.outline(f.shape)[0]]
+                    targets = me.endpoints(self._P(), ed["ids"])
                     sdx, sdy, mark = me.snap_delta(moving, targets, dx, dy, 10.0 * scale)
                     if mark is not None:
                         dx, dy, ed["mark"] = sdx, sdy, mark
@@ -880,7 +954,7 @@ class DsmPatchViewExt:
             self._ed = None
             m = ed["mode"]
             if m == "box":
-                hit_ids = me.box_select(eng.patch, ed["x0"], ed["y0"], ed["x1"], ed["y1"])
+                hit_ids = me.box_select(self._P(), ed["x0"], ed["y0"], ed["x1"], ed["y1"])
                 if abs(ed["x1"] - ed["x0"]) + abs(ed["y1"] - ed["y0"]) > 3 * scale:
                     if ed["toggle"]:
                         cur = list(self.selection)
@@ -894,7 +968,7 @@ class DsmPatchViewExt:
                 p1, p2 = ed["p1"], ed["p2"]
                 if abs(p2[0] - p1[0]) >= 8 * scale and (abs(p2[1] - p1[1]) >= 8 * scale or ed.get("square")):
                     shape = me.rect_shape(p1, p2, ed.get("square", False))
-                    if not me.is_matrix(eng.patch, ui.par.Addtype.eval()):
+                    if not me.is_matrix(self._P(), ui.par.Addtype.eval()):
                         # прямоугольник с линейным профилем лёг бы одной линией по оси — сразу матрица W×H из панели
                         if not self.MapNewMatrixType():
                             self._write_overlay()
@@ -907,8 +981,8 @@ class DsmPatchViewExt:
                 p1, p2 = ed["p1"], ed["p2"]
                 if (p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2 >= (8 * scale) ** 2:
                     type_id = ui.par.Addtype.eval()
-                    ft = next((x for x in eng.patch.fixture_types if x.id == type_id), None)
-                    if ft is not None and me.is_matrix(eng.patch, type_id):         # матрица вдоль линии: W вдоль, H поперёк
+                    ft = next((x for x in self._P().fixture_types if x.id == type_id), None)
+                    if ft is not None and me.is_matrix(self._P(), type_id):         # матрица вдоль линии: W вдоль, H поперёк
                         self._create(me.line_to_rect(p1, p2, ft.width, ft.height), f"матрица {ft.width}×{ft.height}")
                     else:
                         from dsm_core.model import LineShape
@@ -919,23 +993,23 @@ class DsmPatchViewExt:
                     edit = lambda p: me.apply_drag(p, ids, handle, dx, dy, 0.0)  # noqa: E731
                 else:
                     edit = lambda p: me.apply_shift(p, ids, dx, dy)  # noqa: E731
-                self._edit(edit, f"{' '.join(ids[:4])}: {'конец ' + handle if handle != 'body' else 'сдвиг'} {dx:+.0f} {dy:+.0f}",
+                self._medit(edit, f"{' '.join(ids[:4])}: {'конец ' + handle if handle != 'body' else 'сдвиг'} {dx:+.0f} {dy:+.0f}",
                            subject=ids[0] if len(ids) == 1 else None)
             elif m == "scale" and (abs(ed["sx"] - 1) > 1e-4 or abs(ed["sy"] - 1) > 1e-4):
                 ids, piv, sx, sy = ed["ids"], ed["pivot"], ed["sx"], ed["sy"]
-                self._edit(lambda p: me.apply_transform(p, ids, piv, sx, sy, 0.0), f"масштаб {sx:.2f} × {sy:.2f}")
+                self._medit(lambda p: me.apply_transform(p, ids, piv, sx, sy, 0.0), f"масштаб {sx:.2f} × {sy:.2f}")
             elif m == "rotate" and abs(ed["deg"]) > 1e-3:
                 ids, deg = ed["ids"], ed["deg"]
                 piv, _a = me.rotate_angle(ed["bbox"], 0, 1, 0, 1)
-                self._edit(lambda p: me.apply_transform(p, ids, piv, 1.0, 1.0, deg), f"поворот {deg:+.1f}°")
+                self._medit(lambda p: me.apply_transform(p, ids, piv, 1.0, 1.0, deg), f"поворот {deg:+.1f}°")
             self._write_overlay()
 
     def _create(self, shape, what: str) -> bool:
         """Новая фикстура профиля из окна (Addtype) на текущем выходе в авто; выбирается."""
         eng, ui, me = self._engine(), self._mui(), self._me()
         type_id, out = ui.par.Addtype.eval(), self.CurrentOutput()
-        new_id = eng.api.next_ids(eng.patch, "fixture")[0]
-        ok = self._edit(lambda p: me.new_fixture(p, type_id, shape, out)[0], f"новая {new_id}: {what} ({type_id})")
+        new_id = eng.api.next_ids(self._P(), "fixture")[0]
+        ok = self._medit(lambda p: me.new_fixture(p, type_id, shape, out)[0], f"новая {new_id}: {what} ({type_id})")
         if ok:
             self._set_selection([new_id], notify=True)
         return ok
@@ -991,12 +1065,12 @@ class DsmPatchViewExt:
         eng, me = self._engine(), self._me()
         a, b = self.selection
         count = max(1, int(count))
-        new = eng.api.next_ids(eng.patch, "fixture", count)
+        new = eng.api.next_ids(self._P(), "fixture", count)
         try:
-            me.between(eng.patch, a, b, count)
+            me.between(self._P(), a, b, count)
         except (ValueError, KeyError) as e:
             return self._fail(f"Между: {e}", notify=False)
-        ok = self._edit(lambda p: me.between(p, a, b, count)[0], f"между {a} и {b}: {count} шт.", skip=set(new))
+        ok = self._medit(lambda p: me.between(p, a, b, count)[0], f"между {a} и {b}: {count} шт.", skip=set(new))
         if ok:
             self._set_selection(new, notify=True)
         return ok
@@ -1004,7 +1078,7 @@ class DsmPatchViewExt:
     def _ghost(self):
         """Патч «как будет после жеста» для оверлея; без жеста — патч движка."""
         eng, me, ed = self._engine(), self._me(), self._ed
-        p = eng.patch
+        p = self._P()
         if ed is None:
             return p
         m = ed["mode"]
@@ -1060,6 +1134,8 @@ class DsmPatchViewExt:
             insp.par.Output = fx.address.output_id or "none"
             insp.par.Universe = fx.address.universe if fx.address.universe is not None else 0
             insp.par.Channel = fx.address.channel if fx.address.channel is not None else 1
+            self._insp_filled = {n: insp.par[n].eval() for n in
+                                 ("Name", "Type", "X1", "Y1", "X2", "Y2", "Length", "Angle", "Reverse", "Mute")}
         finally:
             self._in_insp = was
 
@@ -1069,12 +1145,15 @@ class DsmPatchViewExt:
         if getattr(self, "_in_insp", False):
             return
         eng, insp = self._engine(), self._insp()
-        if eng.patch is None or insp is None or not self.selection:
+        if self._P() is None or insp is None or not self.selection:
             return
         fid = self.selection[0]
-        fx = next((f for f in eng.patch.fixtures if f.id == fid), None)
+        fx = next((f for f in self._P().fixtures if f.id == fid), None)
         if fx is None:
             return
+        filled = getattr(self, "_insp_filled", {})
+        if par.name in filled and not par.isPulse and par.eval() == filled[par.name]:
+            return        # отложенное эхо заполнения инспектора (в т. ч. после смены INPUT/OUTPUT) — не правка
         name, api, me = par.name, eng.api, self._me()
         import math
         from dataclasses import replace as _replace
@@ -1093,32 +1172,32 @@ class DsmPatchViewExt:
                 same = max(abs(x1 - fx.shape.p1[0]), abs(y1 - fx.shape.p1[1]), abs(x2 - fx.shape.p2[0]),
                            abs(y2 - fx.shape.p2[1])) < 0.01
             else:
-                bb = me.sel_bbox(eng.patch, [fid])
+                bb = me.sel_bbox(self._P(), [fid])
                 shape = me.shift_shape(fx.shape, x1 - bb[0], y1 - bb[1])
                 same = abs(x1 - bb[0]) + abs(y1 - bb[1]) < 0.01
             if same:          # отложенное эхо заполнения инспектора (или округление) — не правка
                 return
-            self._edit(lambda p: api.update_fixture(p, fid, shape=shape), f"{fid}: геометрия", subject=fid)
+            self._medit(lambda p: api.update_fixture(p, fid, shape=shape), f"{fid}: геометрия", subject=fid)
         elif name == "Name":
             v = str(par.eval()).strip()
             if v and v != fx.name:
-                self._edit(lambda p: api.update_fixture(p, fid, name=v), f"{fid}: имя «{v}»", subject=fid)
+                self._medit(lambda p: api.update_fixture(p, fid, name=v), f"{fid}: имя «{v}»", subject=fid)
         elif name == "Type":
             v = str(par.eval())
             if v and v != "none" and v != fx.type_id:
-                ft = next((x for x in eng.patch.fixture_types if x.id == v), None)
+                ft = next((x for x in self._P().fixture_types if x.id == v), None)
                 changes = {"type_id": v}
-                if ft is not None and me.is_matrix(eng.patch, v) and hasattr(fx.shape, "p1"):
+                if ft is not None and me.is_matrix(self._P(), v) and hasattr(fx.shape, "p1"):
                     changes["shape"] = me.line_to_rect(fx.shape.p1, fx.shape.p2, ft.width, ft.height)  # линия → матрица
-                self._edit(lambda p: api.update_fixture(p, fid, **changes), f"{fid}: профиль {v}", subject=fid)
+                self._medit(lambda p: api.update_fixture(p, fid, **changes), f"{fid}: профиль {v}", subject=fid)
         elif name == "Reverse":
             want = "reverse" if par.eval() else "forward"
             if fx.direction.value != want:
-                self._edit(lambda p: me.reverse(p, [fid]), f"{fid}: направление {want}", subject=fid)
+                self._medit(lambda p: me.reverse(p, [fid]), f"{fid}: направление {want}", subject=fid)
         elif name == "Mute":
             v = bool(par.eval())
             if v != bool(fx.mute):
-                self._edit(lambda p: api.update_fixture(p, fid, mute=v), f"{fid}: mute {'вкл' if v else 'выкл'}", subject=fid)
+                self._medit(lambda p: api.update_fixture(p, fid, mute=v), f"{fid}: mute {'вкл' if v else 'выкл'}", subject=fid)
         elif name == "Apply":
             out = insp.par.Output.eval()
             if out in ("", "none"):
@@ -1202,7 +1281,7 @@ class DsmPatchViewExt:
         if ui is None:
             return
         me = self._me()
-        if eng.patch is None:
+        if self._P() is None:
             self._write("me_overlay", [me.OVERLAY_COLUMNS])
             return
         _cw, _ch, scale = self._canvas_scale()
@@ -1210,7 +1289,7 @@ class DsmPatchViewExt:
         try:
             ghost = self._ghost()
         except Exception:  # жест дал недопустимую фигуру (ядро) — показываем без призрака
-            ghost = eng.patch
+            ghost = self._P()
         bad = {f for i in eng.issues if i.level.value == "error" for f in i.fixture_ids}   # не выводятся движком
         draw = (ed["p1"], ed["p2"]) if ed and ed["mode"] == "draw" else None
         if ed and ed["mode"] == "rect":
@@ -1220,7 +1299,8 @@ class DsmPatchViewExt:
             extra_rect = [me._line_row(a, b, me.LINE_PX * 1.5 * scale, me.DRAG_RGB) for a, b in zip(c, c[1:] + c[:1])]
         else:
             extra_rect = []
-        rows = me.overlay_rows(ghost, self.selection, scale, None, draw, bad)
+        colors = {f.id: self.logic.fixture_color(f.id) for f in ghost.fixtures} if self._mode() == "output" else None
+        rows = me.overlay_rows(ghost, self.selection, scale, None, draw, bad, colors)
         if self.selection and ui.par.Tool.eval() == "select":
             bb = me.sel_bbox(ghost, self.selection)
             if bb is not None:
@@ -1251,10 +1331,10 @@ class DsmPatchViewExt:
         if not ids:
             return self._fail("Дублировать: ничего не выбрано", notify=False)
         count = max(1, int(count))
-        new = eng.api.next_ids(eng.patch, "fixture", len(ids) * count)
+        new = eng.api.next_ids(self._P(), "fixture", len(ids) * count)
         api = eng.api
         me = self._me()
-        ok = self._edit(lambda p: me.renumber(api.duplicate_fixtures(p, ids, float(dx), float(dy), count)[0], new),
+        ok = self._medit(lambda p: me.renumber(api.duplicate_fixtures(p, ids, float(dx), float(dy), count)[0], new),
                         f"копии: {len(new)} шт. шаг {dx:+g} {dy:+g}", skip=set(new))
         if ok:
             self._set_selection(new, notify=True)
@@ -1265,7 +1345,7 @@ class DsmPatchViewExt:
         if not self.selection or not self._can_edit("Сдвиг"):
             return False
         ids, me = list(self.selection), self._me()
-        return self._edit(lambda p: me.apply_drag(p, ids, "body", dx, dy, 0.0), f"сдвиг {dx:+g} {dy:+g}",
+        return self._medit(lambda p: me.apply_drag(p, ids, "body", dx, dy, 0.0), f"сдвиг {dx:+g} {dy:+g}",
                           subject=ids[0] if len(ids) == 1 else None)
 
     def MapKeyState(self, key: str, down: bool) -> None:
@@ -1403,7 +1483,7 @@ class DsmPatchViewExt:
                 p = api.remove_fixture(p, fid)
             return p
         self.selection = ()
-        return self._edit(edit, f"удалено: {' '.join(ids[:8])}")
+        return self._medit(edit, f"удалено: {' '.join(ids[:8])}")
 
     def MapReverse(self) -> bool:
         if not self._can_edit("Развернуть"):
@@ -1412,7 +1492,7 @@ class DsmPatchViewExt:
         if not ids:
             return self._fail("Развернуть: ничего не выбрано", notify=False)
         me = self._me()
-        return self._edit(lambda p: me.reverse(p, ids), f"развёрнуто: {' '.join(ids[:8])}")
+        return self._medit(lambda p: me.reverse(p, ids), f"развёрнуто: {' '.join(ids[:8])}")
 
     def MapOpen(self) -> None:
         ui = self._mui()
@@ -1420,11 +1500,17 @@ class DsmPatchViewExt:
             return
         self._sync_types()
         self._write_overlay()
+        if self._main() is not None:
+            self.MainOpen("input" if self._main().par.Mode.eval() == "dmx" else None)
+            return
         ui.op("win").par.winopen.pulse()
 
     def MapClose(self) -> None:
         """Закрыть окно маппинга; Locate снимается — после закрытия на площадке ничего не мигает."""
         ui = self._mui()
+        if ui is not None and self._main() is not None:
+            self.MainClose()
+            return
         if ui is not None:
             if bool(ui.par.Locating):
                 self.MapLocate(False)

@@ -174,7 +174,8 @@ def _line_row(a, b, px: float, rgb, alpha: float = 1.0) -> list[str]:
             f"{rgb[0]:g}", f"{rgb[1]:g}", f"{rgb[2]:g}", f"{alpha:g}"]
 
 
-def overlay_rows(patch: Patch, selected, scale: float, drag=None, draw_new=None, bad=frozenset()) -> list[list[str]]:
+def overlay_rows(patch: Patch, selected, scale: float, drag=None, draw_new=None, bad=frozenset(),
+                 colors=None) -> list[list[str]]:
     """Оверлей холста в пикселях холста: контуры выбранных (белые), ручки концов линий, призрак перетаскивания
     (``drag`` = (ids, handle, dx, dy, step)) и рисуемая линия (``draw_new`` = (p1, p2)). ``scale`` — пикселей холста
     на пиксель экрана (толщина и ручки постоянны на экране)."""
@@ -185,9 +186,14 @@ def overlay_rows(patch: Patch, selected, scale: float, drag=None, draw_new=None,
         if fx.id in sel:
             continue
         pts, closed = outline(fx.shape)
-        rgb, alpha = ((1.0, 0.2, 0.2), 0.95) if fx.id in bad else ((0.7, 0.7, 0.75), 0.45)
+        if fx.id in bad:
+            rgb, alpha, k = (1.0, 0.2, 0.2), 0.95, 1.0
+        elif colors and fx.id in colors:                 # OUTPUT: нет контента под фикстурами — цвет фикстуры, толще
+            rgb, alpha, k = colors[fx.id], 0.95, 2.0
+        else:
+            rgb, alpha, k = (0.7, 0.7, 0.75), 0.45, 0.6
         for a, b in zip(pts, pts[1:] + (pts[:1] if closed else [])):
-            rows.append(_line_row(a, b, lw * (1.0 if fx.id in bad else 0.6), rgb, alpha))
+            rows.append(_line_row(a, b, lw * k, rgb, alpha))
     for fx in patch.fixtures:
         if fx.id not in sel:
             continue
@@ -596,3 +602,31 @@ def matrix_rows(patch: Patch, ids, scale: float, max_lines: int = 96) -> list:
         d = max(min(s.size[0] / w, s.size[1] / h) * 0.6, HANDLE_PX * scale)
         rows.append(_line_row((q[0] - d / 2, q[1]), (q[0] + d / 2, q[1]), d, (0.2, 1.0, 0.4), 0.9))
     return rows
+
+
+
+# ---------- OUTPUT MAP: физическое расположение (output_shape) ----------
+
+def to_output_view(patch: Patch) -> Patch:
+    """Патч «как на площадке»: у каждой фикстуры фигура = output_shape (если задана) иначе входная — на нём работают
+    все инструменты холста OUTPUT."""
+    fx = tuple(replace(f, shape=f.output_shape if f.output_shape is not None else f.shape, output_shape=None)
+               for f in patch.fixtures)
+    return replace(patch, fixtures=fx)
+
+
+def from_output_view(view: Patch, original: Patch) -> Patch:
+    """Правка, сделанная на виде OUTPUT, → настоящий патч: у существующих фикстур фигура вида уходит в output_shape,
+    входная фигура (выборка цвета) остаётся прежней; совпала с входной — output_shape не пишется. Новые фикстуры
+    (созданы на OUTPUT) — как есть: вход = выход, пока их не разведут. Остальные поля (имя, профиль, адрес,
+    направление, удаление) берутся из вида."""
+    orig = {f.id: f for f in original.fixtures}
+    out = []
+    for f in view.fixtures:
+        o = orig.get(f.id)
+        if o is None:
+            out.append(f)
+            continue
+        out_shape = None if (o.output_shape is None and f.shape == o.shape) else f.shape
+        out.append(replace(f, shape=o.shape, output_shape=out_shape))
+    return replace(view, fixtures=tuple(out))

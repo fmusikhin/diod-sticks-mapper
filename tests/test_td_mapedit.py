@@ -170,3 +170,28 @@ def test_matrix_type_line_rect_and_grid():
     assert len(rows) == 7 + 7 + 1
     first = rows[-1]                                          # br_cols: старт — правый нижний угол → клетка (75, 5)
     assert abs(float(first[0]) + float(first[3]) / 2 - 75) < 1e-6 and abs(float(first[1]) - 5) < 1e-6
+
+
+
+def test_output_view_roundtrip_keeps_input_shape():
+    p = _patch()
+    v = me.to_output_view(p)
+    assert _fx(v, "fx1").shape == _fx(p, "fx1").shape                        # без output_shape — как вход
+    v2 = me.apply_shift(v, ["fx1"], 50, 0)
+    q = me.from_output_view(v2, p)
+    assert _fx(q, "fx1").shape == _fx(p, "fx1").shape                        # вход (выборка) не тронут
+    assert _fx(q, "fx1").output_shape.p1 == (170.0, 100.0)                   # выход сдвинут
+    assert _fx(q, "fx2").output_shape is None                                # нетронутые — без output_shape
+    v3 = me.to_output_view(q)
+    assert _fx(v3, "fx1").shape.p1 == (170.0, 100.0)                         # вид снова берёт output_shape
+    q2 = me.from_output_view(me.apply_shift(v3, ["fx1"], -50, 0), q)
+    assert _fx(q2, "fx1").output_shape == _fx(p, "fx1").shape                # вернули на место — остаётся явным
+    v4, fid = me.new_fixture(v, "stick", LineShapeT((0, 0), (0, 100)), "out1")
+    q3 = me.from_output_view(v4, p)
+    assert _fx(q3, fid).shape.p2 == (0.0, 100.0) and _fx(q3, fid).output_shape is None
+    assert api.save is not None and len(api.validate(q3)) >= 0
+
+
+def LineShapeT(a, b):
+    from dsm_core.model import LineShape
+    return LineShape(p1=a, p2=b)
