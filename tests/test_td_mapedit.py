@@ -73,3 +73,39 @@ def test_group_drag_with_grid_keeps_spacing():
     q = me.apply_drag(q, ["fx1", *ids], "body", 13, 0, step=10)    # fx1 120 → 130, остальные +10
     xs = [_fx(q, i).shape.p1[0] for i in ["fx1", *ids]]
     assert xs == [130.0, 132.0, 134.0, 136.0]
+
+
+def test_view_fit_zoom_keeps_point_under_cursor():
+    v = me.fit_view(1280, 720, 940, 529)
+    x, y = me.to_canvas(v, 0.5, 0.5, 940, 529)
+    assert abs(x - 640) < 1e-6 and abs(y - 360) < 1e-6
+    z = me.zoom_at(v, 0.25, 0.75, 2.0, 940, 529)
+    assert abs(z[2] - v[2] / 2) < 1e-9
+    a, b = me.to_canvas(v, 0.25, 0.75, 940, 529), me.to_canvas(z, 0.25, 0.75, 940, 529)
+    assert abs(a[0] - b[0]) < 1e-6 and abs(a[1] - b[1]) < 1e-6
+
+
+def test_box_select_touching():
+    p = _patch()
+    assert me.box_select(p, 100, 300, 130, 310) == ["fx1"]           # задевает середину палки
+    assert set(me.box_select(p, 0, 0, 1280, 720)) == {f.id for f in p.fixtures}
+    assert me.box_select(p, 1200, 0, 1210, 10) == []
+
+
+def test_frame_scale_rotate_and_snap():
+    p = _patch()
+    bb = me.sel_bbox(p, ["fx1"])
+    assert bb == (120.0, 100.0, 120.0, 620.0)
+    assert me.hit_frame(bb, 120, 620, 1.0) in ("ne", "nw")          # нулевая ширина — углы совпадают
+    piv, sx, sy = me.scale_params((0, 0, 100, 100), "ne", 200, 150, uniform=False, from_center=False)
+    assert piv == (0, 0) and sx == 2.0 and sy == 1.5
+    piv, sx, sy = me.scale_params((0, 0, 100, 100), "ne", 200, 150, uniform=True, from_center=False)
+    assert sx == sy == 2.0
+    q = me.apply_transform(p, ["fx1"], (120, 100), deg=90)
+    s = _fx(q, "fx1").shape
+    assert abs(s.p2[0] - (120 - 520)) < 1e-6 and abs(s.p2[1] - 100) < 1e-6
+    piv, a = me.rotate_angle((0, 0, 100, 100), 50, 150, 150, 50, snap_deg=15)
+    assert piv == (50.0, 50.0) and a == -90.0
+    dx, dy, t = me.snap_delta([(0, 0)], [(10, 3)], 8, 2, 5)
+    assert (dx, dy, t) == (10, 3, (10, 3))
+    assert me.snap_delta([(0, 0)], [(50, 50)], 8, 2, 5) == (8, 2, None)

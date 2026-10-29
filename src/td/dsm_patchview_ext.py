@@ -40,7 +40,9 @@ class DsmPatchViewExt:
         self._grab = None                      # (Hit, fixture_id, "map"|"zoom") — перетаскивание сегмента
         self._drop = None                      # (выход, юниверс, канал) под курсором при перетаскивании
         self.place_id: str | None = None       # фикстура из списка «не размещены», ждущая клика по карте (3.6)
-        self._ed: dict | None = None           # жест редактора маппинга: перетаскивание или рисование линии
+        self._ed: dict | None = None           # жест редактора маппинга: пан, рамка, сдвиг, масштаб, поворот, линия
+        self.view = None                       # вид холста (x, y, ширина) в пикселях холста; None — вписать
+        self._space = False                    # пробел зажат — левая кнопка панорамирует
         eng = ownerComp.ext.DsmEngineExt
         eng.AddListener(self.OnPatchLoaded)
         eng.AddInfoProvider(self._info_rows)
@@ -372,6 +374,7 @@ class DsmPatchViewExt:
         if self.undo_doc is not None and not self._undo_valid():
             self._drop_undo()
         self._grab, self._drop, self.place_id = None, None, None     # раскладка сменилась — жест и размещение сброшены
+        self._ed = None
         self._write("pv_preview", [self.logic.RECT_COLUMNS])
         if self.output_id is not None and not any(o.id == self.output_id for o in patch.outputs):
             self.output_id = None
@@ -676,95 +679,233 @@ class DsmPatchViewExt:
     def _me(self):
         return self.ownerComp.op("mapedit_mod").module
 
-    def _canvas_scale(self) -> tuple[float, float, float]:
-        """(ширина, высота холста патча, пикселей холста на пиксель экрана области холста)."""
+    def _area(self) -> tuple[float, float]:
+        """Размер области холста в пикселях экрана — из пар окна (геометрию панели не читаем)."""
         c = self._engine().patch.canvas
         aw = float(self._mui().par.w) - float(self._mui().par.Sidew)
-        return float(c.width), float(c.height), c.width / max(aw, 1.0)
+        return aw, aw * c.height / max(c.width, 1)
+
+    def _canvas_scale(self) -> tuple[float, float, float]:
+        """(ширина, высота холста патча, пикселей холста на пиксель экрана при текущем виде)."""
+        c = self._engine().patch.canvas
+        aw, _ah = self._area()
+        return float(c.width), float(c.height), self._get_view()[2] / max(aw, 1.0)
+
+    def _get_view(self):
+        if self.view is None:
+            c = self._engine().patch.canvas
+            self._set_view(self._me().fit_view(c.width, c.height, *self._area()))
+        return self.view
+
+    def _set_view(self, view) -> None:
+        """Вид холста (x, y левого нижнего угла, ширина — пиксели холста) → пары окна, камера читает их выражениями."""
+        self.view = tuple(float(x) for x in view)
+        ui = self._mui()
+        ui.par.Viewx, ui.par.Viewy, ui.par.Vieww = self.view
+
+    def MapFit(self) -> None:
+        if self._engine().patch is None or self._mui() is None:
+            return
+        c = self._engine().patch.canvas
+        self._set_view(self._me().fit_view(c.width, c.height, *self._area()))
+        self._write_overlay()
+
+    def MapOneToOne(self) -> None:
+        """Масштаб 1:1 (пиксель холста = пиксель экрана) вокруг центра вида."""
+        if self._engine().patch is None or self._mui() is None:
+            return
+        aw, ah = self._area()
+        vx, vy, vw = self._get_view()
+        cx, cy = vx + vw / 2, vy + vw * ah / aw / 2
+        self._set_view((cx - aw / 2, cy - ah / 2, aw))
+        self._write_overlay()
+
+    def OnCanvasWheel(self, u: float, v: float, delta: float) -> None:
+        """Колесо — масштаб к курсору."""
+        if self._engine().patch is None or self._mui() is None or not delta:
+            return
+        self._set_view(self._me().zoom_at(self._get_view(), u, v, 1.15 if delta > 0 else 1 / 1.15, *self._area()))
+        self._write_overlay()
 
     def OnCanvas(self, event: str, u: float, v: float, shift: bool = False, ctrl: bool = False, alt: bool = False) -> None:
-        """Мышь на холсте (как в Resolume): «выбор» — клик выбирает, Shift+клик добавляет, Ctrl+клик переключает;
-        перетаскивание тела выбранных или конца линии, Shift — по одной оси, Alt — без сетки. «Линия» — новая фикстура
-        выбранного профиля от нажатия до отпускания (Shift — строго по оси)."""
+        """Мышь на холсте (как в Resolume). Средняя кнопка или пробел+левая — пан. «Выбор»: клик — выбрать,
+        Shift+клик — добавить, Ctrl+клик — переключить; протяжка по пустому — рамка; тело/концы — сдвиг с привязкой
+        к концам соседей и сетке (Shift — ось, Alt — без привязок); углы рамки — масштаб (Shift — пропорционально,
+        Alt — от центра), верхняя ручка — поворот (Shift — шаг 15°). «Линия»: тянуть от начала до конца."""
         eng, ui = self._engine(), self._mui()
         if eng.patch is None or eng.status != "ok" or ui is None:
             return
         me = self._me()
-        cw, ch, scale = self._canvas_scale()
-        x, y = u * cw, v * ch
+        aw, ah = self._area()
+        _cw, _ch, scale = self._canvas_scale()
+        x, y = me.to_canvas(self._get_view(), u, v, aw, ah)
         step = 0.0 if alt else float(ui.par.Snap)
+        ed = self._ed
+        if event in ("mdown", "down") and (event == "mdown" or self._space):
+            self._ed = {"mode": "pan", "u0": u, "v0": v, "view0": self._get_view()}
+            return
+        if ed is not None and ed["mode"] == "pan":
+            if event in ("move", "mmove"):
+                vx, vy, vw = ed["view0"]
+                self._set_view((vx - (u - ed["u0"]) * vw, vy - (v - ed["v0"]) * vw * ah / aw, vw))
+                self._write_overlay()
+            elif event in ("up", "mup"):
+                self._ed = None
+            return
         if event == "down":
             self._ed = None
             if ui.par.Tool.eval() == "line":
                 p0 = (me.snap(x, step), me.snap(y, step))
                 self._ed = {"mode": "draw", "p1": p0, "p2": p0}
-            else:
-                fid, handle = me.hit(eng.patch, x, y, 6.0 * scale, self.selection)
-                if fid is None:
-                    if not (ctrl or shift):
-                        self._set_selection([], notify=True)
-                elif ctrl:
-                    sel = [i for i in self.selection if i != fid] if fid in self.selection else [*self.selection, fid]
-                    self._set_selection(sel, notify=True)
-                elif shift and fid not in self.selection:
-                    self._set_selection([*self.selection, fid], notify=True)
-                else:
-                    if fid not in self.selection:
-                        self._set_selection([fid], notify=True)
-                    ids = list(self.selection) if handle == "body" else [fid]
-                    self._ed = {"mode": "drag", "ids": ids, "handle": handle, "x0": x, "y0": y, "dx": 0.0, "dy": 0.0}
+                self._write_overlay()
+                return
+            bbox = me.sel_bbox(eng.patch, self.selection) if self.selection else None
+            fh = me.hit_frame(bbox, x, y, scale) if bbox is not None else None
+            if fh == "rot":
+                self._ed = {"mode": "rotate", "ids": list(self.selection), "bbox": bbox, "x0": x, "y0": y, "deg": 0.0}
+                return
+            if fh is not None:
+                self._ed = {"mode": "scale", "ids": list(self.selection), "bbox": bbox, "handle": fh,
+                            "pivot": (0.0, 0.0), "sx": 1.0, "sy": 1.0}
+                return
+            fid, handle = me.hit(eng.patch, x, y, 6.0 * scale, self.selection)
+            if fid is None:
+                if not (ctrl or shift):
+                    self._set_selection([], notify=True)
+                self._ed = {"mode": "box", "x0": x, "y0": y, "x1": x, "y1": y, "add": shift, "toggle": ctrl}
+                self._write_overlay()
+                return
+            if ctrl:
+                sel = [i for i in self.selection if i != fid] if fid in self.selection else [*self.selection, fid]
+                self._set_selection(sel, notify=True)
+                return
+            if shift and fid not in self.selection:
+                self._set_selection([*self.selection, fid], notify=True)
+            elif fid not in self.selection:
+                self._set_selection([fid], notify=True)
+            ids = list(self.selection) if handle == "body" else [fid]
+            self._ed = {"mode": "drag", "ids": ids, "handle": handle, "x0": x, "y0": y, "dx": 0.0, "dy": 0.0, "mark": None}
             self._write_overlay()
             return
-        if self._ed is None:
+        if ed is None:
             return
         if event == "move":
-            if self._ed["mode"] == "draw":
-                p1 = self._ed["p1"]
+            m = ed["mode"]
+            if m == "draw":
+                p1 = ed["p1"]
                 q = (me.snap(x, step), me.snap(y, step))
-                if shift:                                            # строго по оси
+                if shift:
                     q = (q[0], p1[1]) if abs(q[0] - p1[0]) >= abs(q[1] - p1[1]) else (p1[0], q[1])
-                self._ed["p2"] = q
-            else:
-                dx, dy = x - self._ed["x0"], y - self._ed["y0"]
+                ed["p2"] = q
+            elif m == "box":
+                ed["x1"], ed["y1"] = x, y
+            elif m == "drag":
+                dx, dy = x - ed["x0"], y - ed["y0"]
                 if shift:
                     dx, dy = (dx, 0.0) if abs(dx) >= abs(dy) else (0.0, dy)
-                self._ed["dx"], self._ed["dy"], self._ed["step"] = dx, dy, step
+                ed["mark"] = None
+                if not alt:
+                    if ed["handle"] in ("p1", "p2"):
+                        fx = next(f for f in eng.patch.fixtures if f.id == ed["ids"][0])
+                        moving = [getattr(fx.shape, ed["handle"])]
+                    else:
+                        moving = [q for f in eng.patch.fixtures if f.id in set(ed["ids"]) for q in me.outline(f.shape)[0]]
+                    targets = me.endpoints(eng.patch, ed["ids"])
+                    sdx, sdy, mark = me.snap_delta(moving, targets, dx, dy, 10.0 * scale)
+                    if mark is not None:
+                        dx, dy, ed["mark"] = sdx, sdy, mark
+                    elif step > 0 and moving:
+                        ox, oy = moving[0]
+                        dx, dy = me.snap(ox + dx, step) - ox, me.snap(oy + dy, step) - oy
+                ed["dx"], ed["dy"] = dx, dy
+            elif m == "scale":
+                ed["pivot"], ed["sx"], ed["sy"] = me.scale_params(ed["bbox"], ed["handle"], x, y, shift, alt)
+            elif m == "rotate":
+                _piv, ed["deg"] = me.rotate_angle(ed["bbox"], ed["x0"], ed["y0"], x, y, 15.0 if shift else 0.0)
             self._write_overlay()
             return
         if event == "up":
-            ed, self._ed = self._ed, None
-            if ed["mode"] == "draw":
+            self._ed = None
+            m = ed["mode"]
+            if m == "box":
+                hit_ids = me.box_select(eng.patch, ed["x0"], ed["y0"], ed["x1"], ed["y1"])
+                if abs(ed["x1"] - ed["x0"]) + abs(ed["y1"] - ed["y0"]) > 3 * scale:
+                    if ed["toggle"]:
+                        cur = list(self.selection)
+                        sel = [i for i in cur if i not in hit_ids] + [i for i in hit_ids if i not in cur]
+                    elif ed["add"]:
+                        sel = list(dict.fromkeys([*self.selection, *hit_ids]))
+                    else:
+                        sel = hit_ids
+                    self._set_selection(sel, notify=True)
+            elif m == "draw":
                 p1, p2 = ed["p1"], ed["p2"]
-                if (p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2 < (8 * scale) ** 2:
-                    self._write_overlay()
-                    return
-                type_id, out = ui.par.Addtype.eval(), self.CurrentOutput()
-                new_id = eng.api.next_ids(eng.patch, "fixture")[0]
-                if self._edit(lambda p: me.new_line(p, type_id, p1, p2, out)[0], f"новая {new_id} ({type_id})"):
-                    self._set_selection([new_id], notify=True)
-            elif abs(ed["dx"]) + abs(ed["dy"]) > 0.5 * scale:
-                ids, handle, dx, dy, st = ed["ids"], ed["handle"], ed["dx"], ed["dy"], ed.get("step", 0.0)
-                self._edit(lambda p: me.apply_drag(p, ids, handle, dx, dy, st),
-                           f"{' '.join(ids[:4])}: {'конец ' + handle if handle != 'body' else 'сдвиг'} {dx:+.0f} {dy:+.0f}",
+                if (p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2 >= (8 * scale) ** 2:
+                    type_id, out = ui.par.Addtype.eval(), self.CurrentOutput()
+                    new_id = eng.api.next_ids(eng.patch, "fixture")[0]
+                    if self._edit(lambda p: me.new_line(p, type_id, p1, p2, out)[0], f"новая {new_id} ({type_id})"):
+                        self._set_selection([new_id], notify=True)
+            elif m == "drag" and abs(ed["dx"]) + abs(ed["dy"]) > 0.01:
+                ids, handle, dx, dy = ed["ids"], ed["handle"], ed["dx"], ed["dy"]
+                if handle in ("p1", "p2"):
+                    edit = lambda p: me.apply_drag(p, ids, handle, dx, dy, 0.0)  # noqa: E731
+                else:
+                    edit = lambda p: me.apply_shift(p, ids, dx, dy)  # noqa: E731
+                self._edit(edit, f"{' '.join(ids[:4])}: {'конец ' + handle if handle != 'body' else 'сдвиг'} {dx:+.0f} {dy:+.0f}",
                            subject=ids[0] if len(ids) == 1 else None)
+            elif m == "scale" and (abs(ed["sx"] - 1) > 1e-4 or abs(ed["sy"] - 1) > 1e-4):
+                ids, piv, sx, sy = ed["ids"], ed["pivot"], ed["sx"], ed["sy"]
+                self._edit(lambda p: me.apply_transform(p, ids, piv, sx, sy, 0.0), f"масштаб {sx:.2f} × {sy:.2f}")
+            elif m == "rotate" and abs(ed["deg"]) > 1e-3:
+                ids, deg = ed["ids"], ed["deg"]
+                piv, _a = me.rotate_angle(ed["bbox"], 0, 1, 0, 1)
+                self._edit(lambda p: me.apply_transform(p, ids, piv, 1.0, 1.0, deg), f"поворот {deg:+.1f}°")
             self._write_overlay()
+
+    def _ghost(self):
+        """Патч «как будет после жеста» для оверлея; без жеста — патч движка."""
+        eng, me, ed = self._engine(), self._me(), self._ed
+        p = eng.patch
+        if ed is None:
+            return p
+        m = ed["mode"]
+        if m == "drag" and (ed["dx"] or ed["dy"]):
+            if ed["handle"] in ("p1", "p2"):
+                return me.apply_drag(p, ed["ids"], ed["handle"], ed["dx"], ed["dy"], 0.0)
+            return me.apply_shift(p, ed["ids"], ed["dx"], ed["dy"])
+        if m == "scale":
+            return me.apply_transform(p, ed["ids"], ed["pivot"], ed["sx"], ed["sy"], 0.0)
+        if m == "rotate" and ed["deg"]:
+            piv, _a = me.rotate_angle(ed["bbox"], 0, 1, 0, 1)
+            return me.apply_transform(p, ed["ids"], piv, 1.0, 1.0, ed["deg"])
+        return p
 
     def _write_overlay(self) -> None:
         ui, eng = self._mui(), self._engine()
         if ui is None:
             return
-        if eng.patch is None:
-            self._write("me_overlay", [self._me().OVERLAY_COLUMNS])
-            return
         me = self._me()
+        if eng.patch is None:
+            self._write("me_overlay", [me.OVERLAY_COLUMNS])
+            return
         _cw, _ch, scale = self._canvas_scale()
-        drag = draw = None
-        if self._ed and self._ed["mode"] == "drag":
-            drag = (self._ed["ids"], self._ed["handle"], self._ed["dx"], self._ed["dy"], self._ed.get("step", 0.0))
-        elif self._ed and self._ed["mode"] == "draw":
-            draw = (self._ed["p1"], self._ed["p2"])
+        ed = self._ed
+        try:
+            ghost = self._ghost()
+        except Exception:  # жест дал недопустимую фигуру (ядро) — показываем без призрака
+            ghost = eng.patch
         bad = {f for i in eng.issues if i.level.value == "error" for f in i.fixture_ids}   # не выводятся движком
-        self._write("me_overlay", me.overlay_rows(eng.patch, self.selection, scale, drag, draw, bad))
+        draw = (ed["p1"], ed["p2"]) if ed and ed["mode"] == "draw" else None
+        rows = me.overlay_rows(ghost, self.selection, scale, None, draw, bad)
+        if self.selection and ui.par.Tool.eval() == "select":
+            bb = me.sel_bbox(ghost, self.selection)
+            if bb is not None:
+                rows += me.frame_rows(bb, scale)
+        if ed and ed["mode"] == "box":
+            rows += me.box_rows(ed["x0"], ed["y0"], ed["x1"], ed["y1"], scale)
+        if ed and ed["mode"] == "drag" and ed.get("mark") is not None:
+            rows += me.mark_rows(ed["mark"], scale)
+        self._write("me_overlay", rows)
 
     def MapDuplicate(self, dx: float, dy: float, count: int = 1) -> bool:
         """Массив: копии выбранных со сдвигом (dx, dy) × count; новые выбираются."""
@@ -791,6 +932,11 @@ class DsmPatchViewExt:
         return self._edit(lambda p: me.apply_drag(p, ids, "body", dx, dy, 0.0), f"сдвиг {dx:+g} {dy:+g}",
                           subject=ids[0] if len(ids) == 1 else None)
 
+    def MapKeyState(self, key: str, down: bool) -> None:
+        """Удерживаемые клавиши окна маппинга: пробел — пан левой кнопкой."""
+        if key.lower() == "space":
+            self._space = bool(down)
+
     def MapKey(self, key: str, shift: bool = False, ctrl: bool = False) -> None:
         """Клавиши окна маппинга (как в Resolume): Delete/Backspace — удалить, стрелки — сдвиг 1 px (Shift — 10),
         Ctrl+D — массив, Ctrl+A — выбрать все, Ctrl+Z — отмена, Esc — снять выбор, V — выбор, L — линия."""
@@ -814,6 +960,10 @@ class DsmPatchViewExt:
             self._ed = None
             self._set_selection([], notify=True)
             self._write_overlay()
+        elif not ctrl and k == "f":
+            self.MapFit()
+        elif not ctrl and k == "1":
+            self.MapOneToOne()
         elif not ctrl and k == "v":
             ui.par.Tool = "select"
         elif not ctrl and k == "l":

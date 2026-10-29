@@ -212,3 +212,208 @@ def overlay_rows(patch: Patch, selected, scale: float, drag=None, draw_new=None,
     if draw_new is not None:
         rows.append(_line_row(draw_new[0], draw_new[1], lw * 1.5, DRAG_RGB))
     return rows
+
+
+# ---------- вид холста (зум, пан) ----------
+
+def fit_view(cw: float, ch: float, aw: float, ah: float, margin: float = 0.04) -> tuple[float, float, float]:
+    """Вид, в который целиком входит холст: (x, y левого нижнего угла, ширина вида) в пикселях холста."""
+    vw = max(cw, ch * aw / ah) * (1 + 2 * margin)
+    vh = vw * ah / aw
+    return cw / 2 - vw / 2, ch / 2 - vh / 2, vw
+
+
+def to_canvas(view, u: float, v: float, aw: float, ah: float) -> tuple[float, float]:
+    vx, vy, vw = view
+    return vx + u * vw, vy + v * vw * ah / aw
+
+
+def zoom_at(view, u: float, v: float, factor: float, aw: float, ah: float,
+            min_w: float = 20.0, max_w: float = 100000.0) -> tuple[float, float, float]:
+    """Масштаб к курсору: точка холста под (u, v) остаётся под курсором; factor > 1 — приблизить."""
+    x, y = to_canvas(view, u, v, aw, ah)
+    vw = max(min_w, min(max_w, view[2] / factor))
+    return x - u * vw, y - v * vw * ah / aw, vw
+
+
+# ---------- выбор рамкой ----------
+
+def _sample(pts, closed, n: int = 8):
+    segs = list(zip(pts, pts[1:] + (pts[:1] if closed else [])))
+    if not segs:
+        return list(pts)
+    return [(a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n) for a, b in segs for k in range(n + 1)]
+
+
+def box_select(patch: Patch, x0: float, y0: float, x1: float, y1: float) -> list[str]:
+    """Фикстуры, задетые рамкой (любая точка контура внутри) — как выделение рамкой в Resolume."""
+    lx, hx, ly, hy = min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)
+    out = []
+    for fx in patch.fixtures:
+        pts, closed = outline(fx.shape)
+        segs = list(zip(pts, pts[1:] + (pts[:1] if closed else []))) or [(q, q) for q in pts]
+        if any(_seg_in_box(a, b, lx, ly, hx, hy) for a, b in segs) or (closed and _inside(((lx + hx) / 2, (ly + hy) / 2), pts)):
+            out.append(fx.id)
+    return out
+
+
+def _seg_in_box(a, b, lx, ly, hx, hy) -> bool:
+    """Отрезок задевает прямоугольник (Лианг — Барски)."""
+    t0, t1 = 0.0, 1.0
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    for p, q in ((-dx, a[0] - lx), (dx, hx - a[0]), (-dy, a[1] - ly), (dy, hy - a[1])):
+        if p == 0:
+            if q < 0:
+                return False
+        else:
+            r = q / p
+            if p < 0:
+                t0 = max(t0, r)
+            else:
+                t1 = min(t1, r)
+            if t0 > t1:
+                return False
+    return True
+
+
+# ---------- рамка трансформации ----------
+
+def sel_bbox(patch: Patch, ids):
+    pts = [q for f in patch.fixtures if f.id in set(ids) for q in outline(f.shape)[0]]
+    if not pts:
+        return None
+    xs, ys = [q[0] for q in pts], [q[1] for q in pts]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+ROT_OFFSET_PX = 26.0
+
+
+def frame_handles(bbox, scale: float) -> dict:
+    """Ручки рамки: углы (масштаб) и ``rot`` над верхней серединой (поворот)."""
+    x0, y0, x1, y1 = bbox
+    return {"sw": (x0, y0), "se": (x1, y0), "ne": (x1, y1), "nw": (x0, y1),
+            "rot": ((x0 + x1) / 2, y1 + ROT_OFFSET_PX * scale)}
+
+
+def hit_frame(bbox, x: float, y: float, scale: float):
+    tol = HANDLE_PX * scale
+    for name, (hx, hy) in frame_handles(bbox, scale).items():
+        if abs(x - hx) <= tol and abs(y - hy) <= tol:
+            return name
+    return None
+
+
+OPPOSITE = {"sw": "ne", "ne": "sw", "se": "nw", "nw": "se"}
+
+
+def scale_params(bbox, handle: str, x: float, y: float, uniform: bool, from_center: bool):
+    """Опора и коэффициенты масштаба для ручки-угла, перетащенной в (x, y)."""
+    hs = frame_handles(bbox, 1.0)
+    cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+    px, py = (cx, cy) if from_center else hs[OPPOSITE[handle]]
+    hx, hy = hs[handle]
+    sx = (x - px) / (hx - px) if abs(hx - px) > 1e-9 else 1.0
+    sy = (y - py) / (hy - py) if abs(hy - py) > 1e-9 else 1.0
+    if uniform:
+        s = max(abs(sx), abs(sy))
+        sx, sy = math.copysign(s, sx), math.copysign(s, sy)
+    return (px, py), sx, sy
+
+
+def rotate_angle(bbox, x0: float, y0: float, x: float, y: float, snap_deg: float = 0.0):
+    cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+    a = math.degrees(math.atan2(y - cy, x - cx) - math.atan2(y0 - cy, x0 - cx))
+    a = (a + 180.0) % 360.0 - 180.0
+    if snap_deg > 0:
+        a = round(a / snap_deg) * snap_deg
+    return (cx, cy), a
+
+
+def _xf_point(q, pivot, sx, sy, deg):
+    x, y = (q[0] - pivot[0]) * sx, (q[1] - pivot[1]) * sy
+    a = math.radians(deg)
+    return (pivot[0] + x * math.cos(a) - y * math.sin(a), pivot[1] + x * math.sin(a) + y * math.cos(a))
+
+
+def transform_shape(shape, pivot, sx: float = 1.0, sy: float = 1.0, deg: float = 0.0):
+    """Масштаб (sx, sy) и поворот (deg) фигуры вокруг pivot."""
+    def f(q):
+        return _xf_point(q, pivot, sx, sy, deg)
+    if isinstance(shape, LineShape):
+        return replace(shape, p1=f(shape.p1), p2=f(shape.p2))
+    if isinstance(shape, (PolylineShape, CurveShape, CustomShape)):
+        return replace(shape, points=tuple(f(q) for q in shape.points))
+    if isinstance(shape, RectShape):
+        return replace(shape, center=f(shape.center), size=(abs(shape.size[0] * sx), abs(shape.size[1] * sy)),
+                       rotation_deg=shape.rotation_deg + deg)
+    if isinstance(shape, ArcShape):
+        return replace(shape, center=f(shape.center), radius=shape.radius * (abs(sx) + abs(sy)) / 2,
+                       start_deg=shape.start_deg + deg, end_deg=shape.end_deg + deg)
+    return shape
+
+
+def apply_transform(patch: Patch, ids, pivot, sx: float = 1.0, sy: float = 1.0, deg: float = 0.0) -> Patch:
+    p = patch
+    for fid in ids:
+        fx = next(f for f in p.fixtures if f.id == fid)
+        p = update_fixture(p, fid, shape=transform_shape(fx.shape, pivot, sx, sy, deg))
+    return p
+
+
+def apply_shift(patch: Patch, ids, dx: float, dy: float) -> Patch:
+    p = patch
+    for fid in ids:
+        fx = next(f for f in p.fixtures if f.id == fid)
+        p = update_fixture(p, fid, shape=shift_shape(fx.shape, dx, dy))
+    return p
+
+
+# ---------- привязка к соседям ----------
+
+def endpoints(patch: Patch, exclude=()) -> list:
+    """Точки привязки: концы линий и углы прямоугольников невыбранных фикстур."""
+    ex = set(exclude)
+    return [q for f in patch.fixtures if f.id not in ex for q in outline(f.shape)[0]]
+
+
+def snap_delta(moving, targets, dx: float, dy: float, tol: float):
+    """Сдвиг (dx, dy) с привязкой: ближайшая пара «движущаяся точка → цель» в пределах tol прилипает.
+    Возвращает (dx, dy, цель или None)."""
+    best = None
+    for mx, my in moving:
+        qx, qy = mx + dx, my + dy
+        for tx, ty in targets:
+            d = math.hypot(qx - tx, qy - ty)
+            if d <= tol and (best is None or d < best[0]):
+                best = (d, tx - mx, ty - my, (tx, ty))
+    if best is None:
+        return dx, dy, None
+    return best[1], best[2], best[3]
+
+
+def frame_rows(bbox, scale: float, rgb=(0.95, 0.75, 0.2)) -> list:
+    """Рамка выбора с ручками углов и поворота (строки оверлея)."""
+    x0, y0, x1, y1 = bbox
+    lw, hs = 1.0 * scale, HANDLE_PX * scale
+    rows = [_line_row(a, b, lw, rgb, 0.9) for a, b in (((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)),
+                                                       ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0)))]
+    hsx = frame_handles(bbox, scale)
+    rows.append(_line_row(((x0 + x1) / 2, y1), hsx["rot"], lw, rgb, 0.9))
+    for name, (hx, hy) in hsx.items():
+        rows.append(_line_row((hx - hs / 2, hy), (hx + hs / 2, hy), hs, (1.0, 1.0, 1.0) if name == "rot" else rgb))
+    return rows
+
+
+def box_rows(x0, y0, x1, y1, scale: float) -> list:
+    lw = 1.0 * scale
+    c = (0.4, 0.8, 1.0)
+    return [_line_row(a, b, lw, c, 0.9) for a, b in (((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)),
+                                                     ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0)))]
+
+
+def mark_rows(q, scale: float, rgb=(1.0, 0.2, 0.9)) -> list:
+    """Крестик-направляющая в точке привязки."""
+    s = 10 * scale
+    return [_line_row((q[0] - s, q[1]), (q[0] + s, q[1]), 1.5 * scale, rgb),
+            _line_row((q[0], q[1] - s), (q[0], q[1] + s), 1.5 * scale, rgb)]
