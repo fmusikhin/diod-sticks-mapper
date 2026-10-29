@@ -315,6 +315,14 @@ def build_tables(patch: Patch, issues: list[Issue], segments: dict[str, list[Seg
             rows.append([str(net), str(subnet), str(uni), ip, row[col["priority"]], ""])
         routing_by_group[grp] = rows
 
+    # dmxfixturePOP (autolayout) раскладывает каналы по порядку примитивов и считает невозрастающий порядок
+    # пересечением («Channel layout has overlapping fixtures»): порядок патча ≠ порядок адресов после правок
+    # (копии массива в начале цепочки), поэтому примитивы — по возрастанию (сеть, юниверс, канал)
+    def _addr_key(r):
+        return (tuple(int(x) for x in r[5:9]), int(r[3]), int(r[4]))
+    prims_rows[1:] = sorted(prims_rows[1:], key=_addr_key)
+    raw_prims_rows[1:] = sorted(raw_prims_rows[1:], key=_addr_key)
+
     set_rows: Rows = [SET_COLUMNS[:]] + [[f"p{pr}g{og}", str(pr), str(og), tid, f"g{og}"] for (pr, og), tid in sorted(sets.items())]
     raw_set_rows: Rows = [RAW_SET_COLUMNS[:]] + [[f"raw_g{og}", str(og), f"g{og}"] for og in sorted(raw_groups)]
     return GeoTables(cells_rows=cells_rows, prims_rows=prims_rows, raw_rows=raw_rows, raw_prims_rows=raw_prims_rows,

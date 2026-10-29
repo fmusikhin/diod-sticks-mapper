@@ -55,10 +55,21 @@ def test_new_line_auto_on_output_and_reverse():
 
 def test_overlay_rows_selection_drag_and_new():
     p = _patch()
-    rows = me.overlay_rows(p, ("fx1",), 2.0)
+    others = sum(len(me.outline(f.shape)[0]) - (0 if me.outline(f.shape)[1] else 1) for f in p.fixtures if f.id != "fx1")
+    rows = me.overlay_rows(p, ("fx1",), 2.0, bad={"fx3"})
     assert rows[0] == me.OVERLAY_COLUMNS
-    assert len(rows) == 1 + 1 + 2                   # контур линии + две ручки
-    line = rows[1]
+    assert len(rows) == 1 + others + 1 + 2          # контуры остальных + контур линии + две ручки
+    assert any(r[5:9] == ["1", "0.2", "0.2", "0.95"] for r in rows[1:])     # невыводимая fx3 — красная
+    line = rows[1 + others]
     assert line[:5] == ["120.00", "100.00", "90.000", "520.00", "4.00"]
+    others4 = sum(len(me.outline(f.shape)[0]) - (0 if me.outline(f.shape)[1] else 1) for f in p.fixtures if f.id != "fx4")
     rows = me.overlay_rows(p, ("fx4",), 1.0, drag=(("fx4",), "body", 5, 0, 0), draw_new=((0, 0), (10, 0)))
-    assert len(rows) == 1 + 4 + 4 + 1
+    assert len(rows) == 1 + others4 + 4 + 4 + 1
+
+
+def test_group_drag_with_grid_keeps_spacing():
+    p = _patch()
+    q, ids = api.duplicate_fixtures(p, ["fx1"], 2, 0, 3)          # копии через 2 px: 122, 124, 126
+    q = me.apply_drag(q, ["fx1", *ids], "body", 13, 0, step=10)    # fx1 120 → 130, остальные +10
+    xs = [_fx(q, i).shape.p1[0] for i in ["fx1", *ids]]
+    assert xs == [130.0, 132.0, 134.0, 136.0]

@@ -122,11 +122,27 @@ def apply_drag(patch: Patch, ids, handle: str, dx: float, dy: float, step: float
     """Перетаскивание: ручка конца — только у первой фикстуры; тело — двигает все выбранные."""
     ids = list(ids)
     p = patch
-    targets = ids[:1] if handle in ("p1", "p2") else ids
-    for fid in targets:
+    if handle in ("p1", "p2"):
+        fx = next(f for f in p.fixtures if f.id == ids[0])
+        return update_fixture(p, ids[0], shape=drag_shape(fx, handle, dx, dy, step))
+    dx, dy = group_delta(patch, ids, dx, dy, step)
+    for fid in ids:
         fx = next(f for f in p.fixtures if f.id == fid)
-        p = update_fixture(p, fid, shape=drag_shape(fx, handle, dx, dy, step))
+        p = update_fixture(p, fid, shape=shift_shape(fx.shape, dx, dy))
     return p
+
+
+def group_delta(patch: Patch, ids, dx: float, dy: float, step: float) -> tuple[float, float]:
+    """Сдвиг группы: к сетке прилипает первая (захваченная) фикстура, остальные сдвигаются на ту же величину —
+    расстояния внутри группы сохраняются."""
+    if step <= 0 or not ids:
+        return dx, dy
+    fx = next(f for f in patch.fixtures if f.id == list(ids)[0])
+    pts, _ = outline(fx.shape)
+    if not pts:
+        return dx, dy
+    ox, oy = pts[0]
+    return snap(ox + dx, step) - ox, snap(oy + dy, step) - oy
 
 
 def new_line(patch: Patch, type_id: str, p1, p2, output_id: str | None, name: str | None = None) -> tuple[Patch, str]:
@@ -158,13 +174,20 @@ def _line_row(a, b, px: float, rgb, alpha: float = 1.0) -> list[str]:
             f"{rgb[0]:g}", f"{rgb[1]:g}", f"{rgb[2]:g}", f"{alpha:g}"]
 
 
-def overlay_rows(patch: Patch, selected, scale: float, drag=None, draw_new=None) -> list[list[str]]:
+def overlay_rows(patch: Patch, selected, scale: float, drag=None, draw_new=None, bad=frozenset()) -> list[list[str]]:
     """Оверлей холста в пикселях холста: контуры выбранных (белые), ручки концов линий, призрак перетаскивания
     (``drag`` = (ids, handle, dx, dy, step)) и рисуемая линия (``draw_new`` = (p1, p2)). ``scale`` — пикселей холста
     на пиксель экрана (толщина и ручки постоянны на экране)."""
     rows = [list(OVERLAY_COLUMNS)]
     lw, hs = LINE_PX * scale, HANDLE_PX * scale
     sel = set(selected)
+    for fx in patch.fixtures:                       # контуры всех: фикстура видна, даже если движок её не выводит
+        if fx.id in sel:
+            continue
+        pts, closed = outline(fx.shape)
+        rgb, alpha = ((1.0, 0.2, 0.2), 0.95) if fx.id in bad else ((0.7, 0.7, 0.75), 0.45)
+        for a, b in zip(pts, pts[1:] + (pts[:1] if closed else [])):
+            rows.append(_line_row(a, b, lw * (1.0 if fx.id in bad else 0.6), rgb, alpha))
     for fx in patch.fixtures:
         if fx.id not in sel:
             continue
@@ -177,11 +200,13 @@ def overlay_rows(patch: Patch, selected, scale: float, drag=None, draw_new=None)
     if drag is not None:
         ids, handle, dx, dy, step = drag
         targets = list(ids)[:1] if handle in ("p1", "p2") else list(ids)
+        gdx, gdy = (dx, dy) if handle in ("p1", "p2") else group_delta(patch, ids, dx, dy, step)
         for fid in targets:
             fx = next((f for f in patch.fixtures if f.id == fid), None)
             if fx is None:
                 continue
-            pts, closed = outline(drag_shape(fx, handle, dx, dy, step))
+            shape = drag_shape(fx, handle, dx, dy, step) if handle in ("p1", "p2") else shift_shape(fx.shape, gdx, gdy)
+            pts, closed = outline(shape)
             for a, b in zip(pts, pts[1:] + (pts[:1] if closed else [])):
                 rows.append(_line_row(a, b, lw * 1.5, DRAG_RGB))
     if draw_new is not None:

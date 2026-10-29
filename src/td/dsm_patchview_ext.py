@@ -682,16 +682,17 @@ class DsmPatchViewExt:
         aw = float(self._mui().par.w) - float(self._mui().par.Sidew)
         return float(c.width), float(c.height), c.width / max(aw, 1.0)
 
-    def OnCanvas(self, event: str, u: float, v: float, shift: bool = False, ctrl: bool = False) -> None:
-        """Мышь на холсте: инструмент «выбор» — выбор (Ctrl — добавить/убрать), перетаскивание тела выбранных или конца
-        линии (Shift — без привязки к сетке); инструмент «линия» — новая фикстура выбранного профиля от нажатия до отпускания."""
+    def OnCanvas(self, event: str, u: float, v: float, shift: bool = False, ctrl: bool = False, alt: bool = False) -> None:
+        """Мышь на холсте (как в Resolume): «выбор» — клик выбирает, Shift+клик добавляет, Ctrl+клик переключает;
+        перетаскивание тела выбранных или конца линии, Shift — по одной оси, Alt — без сетки. «Линия» — новая фикстура
+        выбранного профиля от нажатия до отпускания (Shift — строго по оси)."""
         eng, ui = self._engine(), self._mui()
         if eng.patch is None or eng.status != "ok" or ui is None:
             return
         me = self._me()
         cw, ch, scale = self._canvas_scale()
         x, y = u * cw, v * ch
-        step = 0.0 if shift else float(ui.par.Snap)
+        step = 0.0 if alt else float(ui.par.Snap)
         if event == "down":
             self._ed = None
             if ui.par.Tool.eval() == "line":
@@ -700,11 +701,13 @@ class DsmPatchViewExt:
             else:
                 fid, handle = me.hit(eng.patch, x, y, 6.0 * scale, self.selection)
                 if fid is None:
-                    if not ctrl:
+                    if not (ctrl or shift):
                         self._set_selection([], notify=True)
                 elif ctrl:
                     sel = [i for i in self.selection if i != fid] if fid in self.selection else [*self.selection, fid]
                     self._set_selection(sel, notify=True)
+                elif shift and fid not in self.selection:
+                    self._set_selection([*self.selection, fid], notify=True)
                 else:
                     if fid not in self.selection:
                         self._set_selection([fid], notify=True)
@@ -716,9 +719,16 @@ class DsmPatchViewExt:
             return
         if event == "move":
             if self._ed["mode"] == "draw":
-                self._ed["p2"] = (me.snap(x, step), me.snap(y, step))
+                p1 = self._ed["p1"]
+                q = (me.snap(x, step), me.snap(y, step))
+                if shift:                                            # строго по оси
+                    q = (q[0], p1[1]) if abs(q[0] - p1[0]) >= abs(q[1] - p1[1]) else (p1[0], q[1])
+                self._ed["p2"] = q
             else:
-                self._ed["dx"], self._ed["dy"], self._ed["step"] = x - self._ed["x0"], y - self._ed["y0"], step
+                dx, dy = x - self._ed["x0"], y - self._ed["y0"]
+                if shift:
+                    dx, dy = (dx, 0.0) if abs(dx) >= abs(dy) else (0.0, dy)
+                self._ed["dx"], self._ed["dy"], self._ed["step"] = dx, dy, step
             self._write_overlay()
             return
         if event == "up":
@@ -753,7 +763,8 @@ class DsmPatchViewExt:
             drag = (self._ed["ids"], self._ed["handle"], self._ed["dx"], self._ed["dy"], self._ed.get("step", 0.0))
         elif self._ed and self._ed["mode"] == "draw":
             draw = (self._ed["p1"], self._ed["p2"])
-        self._write("me_overlay", me.overlay_rows(eng.patch, self.selection, scale, drag, draw))
+        bad = {f for i in eng.issues if i.level.value == "error" for f in i.fixture_ids}   # не выводятся движком
+        self._write("me_overlay", me.overlay_rows(eng.patch, self.selection, scale, drag, draw, bad))
 
     def MapDuplicate(self, dx: float, dy: float, count: int = 1) -> bool:
         """Массив: копии выбранных со сдвигом (dx, dy) × count; новые выбираются."""
@@ -771,6 +782,42 @@ class DsmPatchViewExt:
         if ok:
             self._set_selection(new, notify=True)
         return ok
+
+    def MapNudge(self, dx: float, dy: float) -> bool:
+        """Сдвиг выбранных стрелками (пиксели холста, без сетки)."""
+        if not self.selection or not self._can_edit("Сдвиг"):
+            return False
+        ids, me = list(self.selection), self._me()
+        return self._edit(lambda p: me.apply_drag(p, ids, "body", dx, dy, 0.0), f"сдвиг {dx:+g} {dy:+g}",
+                          subject=ids[0] if len(ids) == 1 else None)
+
+    def MapKey(self, key: str, shift: bool = False, ctrl: bool = False) -> None:
+        """Клавиши окна маппинга (как в Resolume): Delete/Backspace — удалить, стрелки — сдвиг 1 px (Shift — 10),
+        Ctrl+D — массив, Ctrl+A — выбрать все, Ctrl+Z — отмена, Esc — снять выбор, V — выбор, L — линия."""
+        ui, eng = self._mui(), self._engine()
+        if ui is None or eng.patch is None:
+            return
+        k = key.lower()
+        step = 10.0 if shift else 1.0
+        if k in ("delete", "backspace"):
+            self.MapDelete()
+        elif k in ("left", "right", "up", "down"):
+            dx, dy = {"left": (-step, 0), "right": (step, 0), "up": (0, step), "down": (0, -step)}[k]
+            self.MapNudge(dx, dy)
+        elif ctrl and k == "d":
+            self.MapDuplicate(ui.par.Arrdx.eval(), ui.par.Arrdy.eval(), ui.par.Arrcount.eval())
+        elif ctrl and k == "a":
+            self._set_selection([f.id for f in eng.patch.fixtures], notify=True)
+        elif ctrl and k == "z":
+            self.Undo()
+        elif k == "esc":
+            self._ed = None
+            self._set_selection([], notify=True)
+            self._write_overlay()
+        elif not ctrl and k == "v":
+            ui.par.Tool = "select"
+        elif not ctrl and k == "l":
+            ui.par.Tool = "line"
 
     def MapDelete(self) -> bool:
         eng = self._engine()

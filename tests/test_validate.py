@@ -56,6 +56,7 @@ def test_port_limit():
     p = auto_assign_all(make_patch([rgb_type(cells=50)], fxs, [output(ip="127.0.0.1", ports=ports)]))[0]
     iss = [i for i in validate(p) if i.code == IssueCode.PORT_LIMIT]
     assert len(iss) == 1 and "100 ячеек" in iss[0].message
+    assert iss[0].fixture_ids == ("fx2",)          # не влезла только вторая — первая выводится
 
 
 def test_universe_dup_same_ip():
